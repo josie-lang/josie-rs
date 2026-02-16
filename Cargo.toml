@@ -1,0 +1,18 @@
+[workspace]
+members = [
+    "crates/josie-core",
+    "crates/josie-web",
+    "crates/josie-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Insan Al-Amin"]
+repository = "https://github.com/josie-lang/josie-rs"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
