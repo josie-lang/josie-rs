@@ -24,6 +24,16 @@
 //! 4. **Generic tree/pipeline fallback**
 //!    Preserves full semantics for any valid document not covered above.
 //!
+//! Pipeline step contract summary:
+//!
+//! | op | required fields | notes |
+//! |---|---|---|
+//! | `call` | `fn` | optional `into`, `args`, `when` |
+//! | `set` | `into`, `args[0]` | writes to runtime var or `client.*`/`server.*` |
+//! | `get` | `from` | reads `$prev`, runtime vars, or state paths |
+//! | `map`/`filter`/`for_each`/`reduce` | `from`, `do` | `reduce` optionally uses init value from `args[0]` |
+//! | `if`/`match`/`do`/`pipe` | `args` | tree-style ops executed in pipeline flow |
+//!
 //! Why this improves performance:
 //!
 //! - Removes repeated parse and shape checks from hot loops.
@@ -40,8 +50,11 @@ use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::rc::Rc;
 
+/// Generic host callback used by pipeline `call` integration.
 pub type HostCallFn = fn(&[Value]) -> Result<Value, RuntimeError>;
+/// Typed generator callback for optimized external map fast-paths.
 pub type HostGenerateI64Fn = fn(i64, i64, usize) -> Vec<i64>;
+/// Typed mapper callback for optimized external map fast-paths.
 pub type HostMapI64Fn = fn(i64) -> i64;
 
 /// Host function registry used by optimized execution paths.
@@ -57,18 +70,22 @@ pub struct HostFunctions {
 }
 
 impl HostFunctions {
+    /// Create an empty host function registry.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Register a generic host callback for `call` steps.
     pub fn register_call(&mut self, name: impl Into<String>, func: HostCallFn) {
         self.call.insert(name.into(), func);
     }
 
+    /// Register typed generator callback used by external fast-path plans.
     pub fn register_generate_i64(&mut self, name: impl Into<String>, func: HostGenerateI64Fn) {
         self.generate_i64.insert(name.into(), func);
     }
 
+    /// Register typed mapper callback used by external fast-path plans.
     pub fn register_map_i64(&mut self, name: impl Into<String>, func: HostMapI64Fn) {
         self.map_i64.insert(name.into(), func);
     }
@@ -86,6 +103,7 @@ impl HostFunctions {
     }
 }
 
+/// Parsed top-level program envelope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Program {
     #[serde(default)]
@@ -93,6 +111,7 @@ pub struct Program {
     pub program: Value,
 }
 
+/// Canonical pipeline document shape (`type = "pipeline"`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineDoc {
     #[serde(rename = "type")]
@@ -100,6 +119,7 @@ pub struct PipelineDoc {
     pub steps: Vec<PipelineStep>,
 }
 
+/// Canonical pipeline step shape used by parser and executor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineStep {
     pub op: String,
@@ -117,6 +137,7 @@ pub struct PipelineStep {
     pub when: Option<Value>,
 }
 
+/// Structured validation error produced before execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ValidationError {
     pub code: String,
@@ -142,6 +163,7 @@ impl ValidationError {
     }
 }
 
+/// Structured runtime error produced during execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeError {
     pub code: String,
@@ -232,6 +254,7 @@ pub struct CompiledProgram {
     pub body: CompiledProgramBody,
 }
 
+/// Execution result with final value and mutated state.
 #[derive(Debug, Clone)]
 pub struct ExecutionOutput {
     pub value: Value,

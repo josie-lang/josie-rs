@@ -1,16 +1,30 @@
+//! Runtime evaluator and operator registry for JOSIE tree expressions.
+//!
+//! This module defines:
+//! - canonical runtime state ([`State`])
+//! - execution context ([`Context`])
+//! - operator table ([`Operators`])
+//! - recursive evaluator ([`evaluate`])
+//!
+//! Operator names here are the canonical core surface used by web/cli adapters.
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
+/// Canonical JSON node type accepted by the evaluator.
 pub type JsonNode = Value;
+/// Standard evaluator return type.
 pub type EvalResult = Result<Value, EvalError>;
 
+/// Runtime evaluation error.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvalError {
     pub message: String,
 }
 
 impl EvalError {
+    /// Create a new runtime evaluation error.
     pub fn new(msg: impl Into<String>) -> Self {
         Self {
             message: msg.into(),
@@ -18,12 +32,14 @@ impl EvalError {
     }
 }
 
+/// Runtime-defined function metadata for `def` / `call`.
 #[derive(Debug, Clone)]
 pub struct FunctionDef {
     pub params: Vec<String>,
     pub body: Value,
 }
 
+/// Runtime state split into `server` and `client` scopes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct State {
     pub server: Map<String, Value>,
@@ -33,6 +49,7 @@ pub struct State {
 }
 
 impl State {
+    /// Create an empty runtime state.
     pub fn new() -> Self {
         Self {
             server: Map::new(),
@@ -48,6 +65,7 @@ impl Default for State {
     }
 }
 
+/// Event context used by `w.event.*` operators.
 #[derive(Debug, Clone)]
 pub struct EventContext {
     pub value: Value,
@@ -65,19 +83,25 @@ impl Default for EventContext {
     }
 }
 
+/// Mutable execution context passed to every operator call.
 pub struct Context<'a> {
     pub state: &'a mut State,
     pub operators: &'a Operators,
     pub event: Option<&'a EventContext>,
 }
 
+/// Operator function signature used by the registry.
 pub type Operator = fn(args: &[Value], ctx: &mut Context) -> EvalResult;
 
+/// Canonical operator registry.
+///
+/// Use [`Operators::register`] to add host-specific operators (typically `x.*`).
 pub struct Operators {
     ops: HashMap<String, Operator>,
 }
 
 impl Operators {
+    /// Build the default canonical operator registry.
     pub fn new() -> Self {
         let mut ops: HashMap<String, Operator> = HashMap::new();
         ops.insert("var".into(), op_var as Operator);
@@ -125,10 +149,12 @@ impl Operators {
         Self { ops }
     }
 
+    /// Lookup an operator by name.
     pub fn get(&self, name: &str) -> Option<Operator> {
         self.ops.get(name).copied()
     }
 
+    /// Register or replace an operator. Returns previous handler if present.
     pub fn register(&mut self, name: impl Into<String>, operator: Operator) -> Option<Operator> {
         self.ops.insert(name.into(), operator)
     }
@@ -140,6 +166,10 @@ impl Default for Operators {
     }
 }
 
+/// Recursively evaluate a JOSIE tree expression.
+///
+/// If the first array element is a known string operator, dispatches to
+/// that operator; otherwise evaluates array/object children as literals.
 pub fn evaluate(node: &Value, ctx: &mut Context) -> EvalResult {
     match node {
         Value::Array(arr) => {
@@ -168,6 +198,7 @@ pub fn evaluate(node: &Value, ctx: &mut Context) -> EvalResult {
     }
 }
 
+/// Read a value using dot-path semantics from a state map.
 pub fn get_path(state: &Map<String, Value>, path: &Value) -> Option<Value> {
     let path = path.as_str()?;
     if let Some(rest) = path.strip_prefix("client.") {
@@ -185,6 +216,7 @@ pub fn get_path(state: &Map<String, Value>, path: &Value) -> Option<Value> {
     map_get(state, path)
 }
 
+/// Write a value using dot-path semantics into a state map.
 pub fn set_path(state: &mut Map<String, Value>, path: &Value, value: Value) {
     let Some(path) = path.as_str() else {
         return;

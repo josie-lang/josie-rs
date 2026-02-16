@@ -2,12 +2,16 @@
 name = "josie-core"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 license = "MIT"
 authors = ["JOSIE Team"]
 repository = "https://github.com/josie-lang/josie-rs"
 homepage = "https://josie-lang.org"
-documentation = "https://josie-lang.org"
+documentation = "https://docs.rs/josie-core"
+readme = "README.md"
 description = "High-performance core runtime for JOSIE (JSON Omni Safe Interactive Expressions), with deterministic tree-based pipeline execution and embeddable operator/function registries."
+keywords = ["josie", "json", "interpreter", "pipeline", "runtime"]
+categories = ["compilers", "parser-implementations", "development-tools"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

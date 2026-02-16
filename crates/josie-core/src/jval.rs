@@ -1,3 +1,10 @@
+//! Internal value model used by compiled execution paths.
+//!
+//! [`JVal`] is designed for low-overhead evaluation:
+//! - inline numeric/bool/null variants
+//! - `Rc`-backed strings/arrays/objects for cheap cloning
+//! - predictable truthiness and conversion helpers used by the VM
+
 use serde_json::{Map, Number, Value};
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -18,6 +25,7 @@ pub enum JVal {
 }
 
 impl JVal {
+    /// Evaluate language-level truthiness.
     #[inline]
     pub fn is_truthy(&self) -> bool {
         match self {
@@ -31,6 +39,7 @@ impl JVal {
         }
     }
 
+    /// Convert into `i64` using JOSIE coercion rules.
     #[inline]
     pub fn as_i64(&self) -> Option<i64> {
         match self {
@@ -42,6 +51,7 @@ impl JVal {
         }
     }
 
+    /// Convert into `f64` using JOSIE coercion rules.
     #[inline]
     pub fn as_f64(&self) -> Option<f64> {
         match self {
@@ -53,6 +63,7 @@ impl JVal {
         }
     }
 
+    /// Borrow as string if variant is `Str`.
     #[inline]
     pub fn as_str(&self) -> Option<&str> {
         match self {
@@ -61,6 +72,7 @@ impl JVal {
         }
     }
 
+    /// Compare numerically when possible, otherwise lexicographically by display string.
     pub fn cmp_numeric_or_string(&self, other: &JVal) -> Option<std::cmp::Ordering> {
         match (self.as_f64(), other.as_f64()) {
             (Some(a), Some(b)) => a.partial_cmp(&b),
@@ -72,6 +84,7 @@ impl JVal {
         }
     }
 
+    /// Stable human-readable string conversion used by templating and fallback comparisons.
     pub fn display_string(&self) -> String {
         match self {
             JVal::Null => "null".to_string(),

@@ -1,3 +1,8 @@
+//! Typed VM evaluator for compiled [`Expr`](crate::compiler::Expr).
+//!
+//! This module is the hot execution loop for compiled pipeline expressions.
+//! It avoids runtime string operator dispatch by matching over enum variants.
+
 use crate::compiler::Expr;
 use crate::jval::{format_f64, JVal};
 use crate::runtime::{Context, EvalError, Operators, State};
@@ -13,6 +18,7 @@ pub struct IterLocals {
 }
 
 impl IterLocals {
+    /// Create iterator locals with `item` and `index`.
     #[inline]
     pub fn new(item: JVal, index: i64) -> Self {
         Self {
@@ -22,6 +28,7 @@ impl IterLocals {
         }
     }
 
+    /// Create iterator locals with explicit reduce accumulator.
     #[inline]
     pub fn with_acc(item: JVal, index: i64, acc: JVal) -> Self {
         Self {
@@ -31,6 +38,7 @@ impl IterLocals {
         }
     }
 
+    /// Create empty locals for non-iterator evaluation contexts.
     #[inline]
     pub fn empty() -> Self {
         Self {

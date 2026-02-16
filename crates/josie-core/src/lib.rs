@@ -1,34 +1,83 @@
-//! JOSIE Core crate.
+//! # josie-core
 //!
-//! This crate intentionally separates execution concerns into layers:
+//! Core runtime and execution planner for **JOSIE**
+//! (JSON Omni Safe Interactive Expressions).
 //!
-//! - `runtime`: baseline tree evaluator and operator registry.
-//! - `program`: pipeline document contract, validation, compilation, and
-//!   multi-strategy execution dispatch.
-//! - `compiler` + `vm` + `jval`: typed expression lowering and fast VM
-//!   execution used by compiled pipeline paths.
+//! ## Module Roles
 //!
-//! Performance strategy (high level):
+//! | Module | Responsibility | Public Entry Points |
+//! |---|---|---|
+//! | `runtime` | Tree evaluator + operator registry | [`evaluate`], [`Operators`], [`State`] |
+//! | `program` | Program envelope validation, compile planning, pipeline execution | `parse_program`, `compile_program`, `execute_program*` |
+//! | `compiler` | `serde_json::Value` expression -> typed IR | [`Expr`] and `compile_expr` |
+//! | `vm` | Fast typed IR evaluator | [`eval_expr`], [`IterLocals`] |
+//! | `jval` | Internal value representation for VM execution | [`JVal`] |
 //!
-//! 1. Validate once (`parse_program` / `validate_program`).
-//! 2. Compile once (`compile_program`) into the best available execution body:
-//!    pattern-specialized fast plan, compiled pipeline, or tree fallback.
-//! 3. Execute many times with mutable state.
+//! ## Execution Contract
 //!
-//! The critical design rule is semantic equivalence across execution tiers:
-//! every optimization path must produce the same observable output as the
-//! generic evaluator.
+//! 1. Parse/validate once.
+//! 2. Compile once into best available strategy.
+//! 3. Execute many times.
+//!
+//! Optimization tiers in `program`:
+//!
+//! 1. Specialized internal fast plans.
+//! 2. Specialized typed host-call fast plans.
+//! 3. Compiled pipeline IR path.
+//! 4. Generic tree/pipeline fallback.
+//!
+//! **Rule:** all optimized paths must preserve the same observable semantics
+//! as the generic evaluator.
+//!
+//! ## Hello World (Tree Evaluation)
+//!
+//! ```no_run
+//! use josie_core::{evaluate, Context, Operators, State};
+//! use serde_json::json;
+//!
+//! let mut state = State::new();
+//! let operators = Operators::new();
+//! let expr = json!(["u.concat", "Hello", ", ", "World"]);
+//!
+//! let mut ctx = Context {
+//!     state: &mut state,
+//!     operators: &operators,
+//!     event: None,
+//! };
+//! let out = evaluate(&expr, &mut ctx).expect("evaluate");
+//! assert_eq!(out, json!("Hello, World"));
+//! ```
+//!
+//! ## Inject Custom `x.*` Operator
+//!
+//! ```no_run
+//! use josie_core::{Context, EvalResult, Operator, Operators, State, evaluate};
+//! use serde_json::{json, Value};
+//!
+//! fn op_x_echo(args: &[Value], _ctx: &mut Context) -> EvalResult {
+//!     Ok(args.first().cloned().unwrap_or(Value::Null))
+//! }
+//!
+//! let mut operators = Operators::new();
+//! operators.register("x.echo", op_x_echo as Operator);
+//!
+//! let mut state = State::new();
+//! let expr = json!(["x.echo", {"ok": true}]);
+//! let mut ctx = Context { state: &mut state, operators: &operators, event: None };
+//! let out = evaluate(&expr, &mut ctx).expect("x.echo");
+//! assert_eq!(out, json!({"ok": true}));
+//! ```
 
-pub mod runtime;
-pub mod program;
-pub mod jval;
 pub mod compiler;
+pub mod jval;
+pub mod program;
+pub mod runtime;
 pub mod vm;
 
+pub use compiler::Expr;
+pub use jval::JVal;
 pub use runtime::{
     Context, EvalError, EvalResult, EventContext, FunctionDef, JsonNode, Operator, Operators,
     State, evaluate, get_path, set_path,
 };
-pub use jval::JVal;
-pub use compiler::Expr;
 pub use vm::{IterLocals, eval_expr};

@@ -1,3 +1,12 @@
+//! Expression compiler from JSON tree nodes to typed [`Expr`] IR.
+//!
+//! This stage performs:
+//! - operator-name normalization into enum variants
+//! - iterator-local specialization (`item`, `index`, `acc`)
+//! - small constant-folding passes for arithmetic hotspots
+//!
+//! The output IR is consumed by [`crate::vm::eval_expr`].
+
 use crate::jval::JVal;
 use serde_json::Value;
 use std::rc::Rc;
