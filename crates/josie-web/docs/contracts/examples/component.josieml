@@ -1,0 +1,41 @@
+<div class="hidden fixed top-4 right-4 z-50 w-[24rem] rounded-lg border border-zinc-700 bg-zinc-900 text-white shadow-2xl p-4"
+     j-attr:class="client.toast.class">
+  <div class="space-y-1">
+    <p class="text-sm font-semibold" j-text="client.toast.title"></p>
+    <p class="text-xs" j-text="client.toast.desc"></p>
+  </div>
+  <button type="button" class="mt-2 text-xs underline" @click="toast.dismiss">Close</button>
+</div>
+
+<script type="application/josie+json">
+{
+  "kind": "program",
+  "version": "0.1.0",
+  "state": {
+    "client": {
+      "toast": {
+        "class": "hidden fixed top-4 right-4 z-50 w-[24rem] rounded-lg border border-zinc-700 bg-zinc-900 text-white shadow-2xl p-4",
+        "showClass": "fixed top-4 right-4 z-50 w-[24rem] rounded-lg border border-zinc-700 bg-zinc-900 text-white shadow-2xl p-4",
+        "hideClass": "hidden fixed top-4 right-4 z-50 w-[24rem] rounded-lg border border-zinc-700 bg-zinc-900 text-white shadow-2xl p-4",
+        "title": "",
+        "desc": ""
+      }
+    }
+  },
+  "component": { "slug": "ui.toast" },
+  "actions": {
+    "toast.dismiss": { "runStep": "toast.dismiss" }
+  },
+  "steps": [
+    {
+      "id": "toast.dismiss",
+      "op": "do",
+      "args": [
+        ["set", "client.toast.class", ["var", "client.toast.hideClass"]],
+        ["set", "client.toast.title", ""],
+        ["set", "client.toast.desc", ""]
+      ]
+    }
+  ]
+}
+</script>

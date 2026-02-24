@@ -5,15 +5,13 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-
-[features]
-default = []
-tailwind = []
-axum = ["dep:axum"]
+homepage = "https://josie-lang.org"
+documentation = "https://docs.rs/josie-web"
+readme = "README.md"
+description = "Web framework for JOSIE (JSON Omni Safe Interactive Expressions), enabling compile-first reactive web pages with strict security walls and deterministic performance."
+keywords = ["josie", "web", "reactive", "compiler", "runtime"]
+categories = ["web-programming", "development-tools"]
 
 [dependencies]
-josie-core = { path = "../josie-core" }
-serde = { workspace = true }
-serde_json = { workspace = true }
-axum = { version = "0.8", optional = true }
-ureq = { version = "2.12.1" }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true

@@ -1,0 +1,220 @@
+{
+  "kind": "program",
+  "version": "0.1.0",
+  "state": {
+    "client": {
+      "appTitle": "TigerGun Todo",
+      "newTodo": "",
+      "seq": 4,
+      "todos": [
+        { "id": "1", "title": "Define pipeline contract", "done": false },
+        { "id": "2", "title": "Build webhook flow", "done": true },
+        { "id": "3", "title": "Ship project dashboard", "done": false }
+      ],
+      "stats": { "total": 3, "done": 1, "open": 2 },
+      "viewTodos": [
+        {
+          "id": "1",
+          "title": "Define pipeline contract",
+          "done": false,
+          "status": "OPEN",
+          "rowClass": "flex items-center gap-3 rounded-xl border border-zinc-700 bg-zinc-800/60 px-3 py-2",
+          "titleClass": "flex-1 text-sm text-zinc-100"
+        },
+        {
+          "id": "2",
+          "title": "Build webhook flow",
+          "done": true,
+          "status": "DONE",
+          "rowClass": "flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2",
+          "titleClass": "flex-1 text-sm text-zinc-400 line-through"
+        },
+        {
+          "id": "3",
+          "title": "Ship project dashboard",
+          "done": false,
+          "status": "OPEN",
+          "rowClass": "flex items-center gap-3 rounded-xl border border-zinc-700 bg-zinc-800/60 px-3 py-2",
+          "titleClass": "flex-1 text-sm text-zinc-100"
+        }
+      ]
+    }
+  },
+  "actions": {
+    "todo.add": {
+      "run": [
+        { "step": "todo.add.core" },
+        { "step": "todo.recalc" },
+        { "step": "todo.sync_view" }
+      ]
+    },
+    "todo.toggle": {
+      "run": [
+        { "step": "todo.toggle.core" },
+        { "step": "todo.recalc" },
+        { "step": "todo.sync_view" }
+      ]
+    },
+    "todo.delete": {
+      "run": [
+        { "step": "todo.delete.core" },
+        { "step": "todo.recalc" },
+        { "step": "todo.sync_view" }
+      ]
+    },
+    "todo.clear_done": {
+      "run": [
+        { "step": "todo.clear_done.core" },
+        { "step": "todo.recalc" },
+        { "step": "todo.sync_view" }
+      ]
+    }
+  },
+  "resources": [],
+  "steps": [
+    {
+      "id": "todo.add.core",
+      "type": "action",
+      "op": "do",
+      "args": [
+        ["w.event.prevent"],
+        [
+          "if",
+          [">", ["util.str_len", ["util.trim", ["var", "client.newTodo"]]], 0],
+          [
+            "do",
+            [
+              "set",
+              "client.todos",
+              [
+                "push",
+                ["var", "client.todos"],
+                {
+                  "id": ["util.to_string", ["var", "client.seq"]],
+                  "title": ["util.trim", ["var", "client.newTodo"]],
+                  "done": false
+                }
+              ]
+            ],
+            ["set", "client.seq", ["+", ["var", "client.seq"], 1]],
+            ["set", "client.newTodo", ""]
+          ],
+          null
+        ]
+      ]
+    },
+    {
+      "id": "todo.toggle.core",
+      "type": "action",
+      "op": "do",
+      "args": [
+        [
+          "set",
+          "client.todos",
+          [
+            "map",
+            ["var", "client.todos"],
+            {
+              "id": ["var", "item.id"],
+              "title": ["var", "item.title"],
+              "done": [
+                "if",
+                ["==", ["var", "item.id"], ["w.event.value"]],
+                ["!", ["var", "item.done"]],
+                ["var", "item.done"]
+              ]
+            }
+          ]
+        ]
+      ]
+    },
+    {
+      "id": "todo.delete.core",
+      "type": "action",
+      "op": "do",
+      "args": [
+        [
+          "set",
+          "client.todos",
+          [
+            "filter",
+            ["var", "client.todos"],
+            ["!=", ["var", "item.id"], ["w.event.value"]]
+          ]
+        ]
+      ]
+    },
+    {
+      "id": "todo.clear_done.core",
+      "type": "action",
+      "op": "do",
+      "args": [
+        [
+          "set",
+          "client.todos",
+          [
+            "filter",
+            ["var", "client.todos"],
+            ["!", ["var", "item.done"]]
+          ]
+        ]
+      ]
+    },
+    {
+      "id": "todo.recalc",
+      "type": "transform",
+      "op": "do",
+      "args": [
+        ["set", "client.stats.total", ["len", ["var", "client.todos"]]],
+        [
+          "set",
+          "client.stats.done",
+          [
+            "reduce",
+            ["var", "client.todos"],
+            ["if", ["var", "item.done"], ["+", ["var", "acc"], 1], ["var", "acc"]],
+            0
+          ]
+        ],
+        [
+          "set",
+          "client.stats.open",
+          ["-", ["var", "client.stats.total"], ["var", "client.stats.done"]]
+        ]
+      ]
+    },
+    {
+      "id": "todo.sync_view",
+      "type": "transform",
+      "op": "do",
+      "args": [
+        [
+          "set",
+          "client.viewTodos",
+          [
+            "map",
+            ["var", "client.todos"],
+            {
+              "id": ["var", "item.id"],
+              "title": ["var", "item.title"],
+              "done": ["var", "item.done"],
+              "status": ["if", ["var", "item.done"], "DONE", "OPEN"],
+              "rowClass": [
+                "if",
+                ["var", "item.done"],
+                "flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2",
+                "flex items-center gap-3 rounded-xl border border-zinc-700 bg-zinc-800/60 px-3 py-2"
+              ],
+              "titleClass": [
+                "if",
+                ["var", "item.done"],
+                "flex-1 text-sm text-zinc-400 line-through",
+                "flex-1 text-sm text-zinc-100"
+              ]
+            }
+          ]
+        ]
+      ]
+    }
+  ]
+}

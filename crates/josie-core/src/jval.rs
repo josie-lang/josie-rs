@@ -140,9 +140,7 @@ impl From<Value> for JVal {
                 }
             }
             Value::String(s) => JVal::Str(Rc::from(s.as_str())),
-            Value::Array(arr) => {
-                JVal::Array(Rc::new(arr.into_iter().map(JVal::from).collect()))
-            }
+            Value::Array(arr) => JVal::Array(Rc::new(arr.into_iter().map(JVal::from).collect())),
             Value::Object(obj) => {
                 let map: BTreeMap<Rc<str>, JVal> = obj
                     .into_iter()

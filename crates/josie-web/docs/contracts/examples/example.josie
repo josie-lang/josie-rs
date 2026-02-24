@@ -1,0 +1,39 @@
+{
+  "kind": "program",
+  "version": "0.1.0",
+  "state": {
+    "client": {
+      "page": { "title": "TigerGun" },
+      "count": 0,
+      "message": "",
+      "messageClass": "hidden"
+    }
+  },
+  "actions": {
+    "counter.inc": { "runStep": "counter.inc" }
+  },
+  "resources": ["josie-runtime-js", "app-css"],
+  "steps": [
+    {
+      "id": "counter.inc",
+      "op": "do",
+      "args": [
+        ["set", "client.count", ["+", ["var", "client.count"], 1]],
+        [
+          "if",
+          [">", ["var", "client.count"], 2],
+          [
+            "do",
+            ["set", "client.message", "Reactive state is live."],
+            ["set", "client.messageClass", "text-emerald-400 mt-2 block"]
+          ],
+          [
+            "do",
+            ["set", "client.message", ""],
+            ["set", "client.messageClass", "hidden"]
+          ]
+        ]
+      ]
+    }
+  ]
+}

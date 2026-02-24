@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Josie Web Example</title>
+</head>
+<body class="min-h-screen bg-zinc-950 text-zinc-100">
+  <main class="mx-auto max-w-3xl px-6 py-10 space-y-5">
+    <h1 class="text-3xl font-bold" j-text="client.page.title">TigerGun</h1>
+
+    <button class="rounded-lg bg-zinc-100 text-zinc-900 px-4 py-2" @click="counter.inc">
+      Count: <span j-text="client.count">0</span>
+    </button>
+
+    <p class="hidden" j-attr:class="client.messageClass" j-text="client.message"></p>
+  </main>
+
+  <script type="application/josie+json">
+  {
+    "kind": "program",
+    "version": "0.1.0",
+    "state": {
+      "client": {
+        "page": { "title": "TigerGun" },
+        "count": 0,
+        "message": "",
+        "messageClass": "hidden"
+      }
+    },
+    "actions": {
+      "counter.inc": { "runStep": "counter.inc" }
+    },
+    "resources": ["josie-runtime-js", "app-css"],
+    "steps": [
+      {
+        "id": "counter.inc",
+        "op": "do",
+        "args": [
+          ["set", "client.count", ["+", ["var", "client.count"], 1]],
+          [
+            "if",
+            [">", ["var", "client.count"], 2],
+            [
+              "do",
+              ["set", "client.message", "Reactive state is live."],
+              ["set", "client.messageClass", "text-emerald-400 mt-2 block"]
+            ],
+            [
+              "do",
+              ["set", "client.message", ""],
+              ["set", "client.messageClass", "hidden"]
+            ]
+          ]
+        ]
+      }
+    ]
+  }
+  </script>
+</body>
+</html>

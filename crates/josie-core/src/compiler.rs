@@ -114,9 +114,7 @@ pub fn compile_expr(value: &Value, iter_ctx: bool, reduce_ctx: bool) -> Expr {
             }
         }
         Value::String(s) => Expr::Literal(JVal::Str(Rc::from(s.as_str()))),
-        Value::Array(arr) if arr.is_empty() => {
-            Expr::Literal(JVal::Array(Rc::new(vec![])))
-        }
+        Value::Array(arr) if arr.is_empty() => Expr::Literal(JVal::Array(Rc::new(vec![]))),
         Value::Array(arr) => {
             if let Some(op_name) = arr[0].as_str() {
                 compile_op(op_name, &arr[1..], iter_ctx, reduce_ctx)
@@ -187,18 +185,24 @@ fn compile_op(op: &str, args: &[Value], iter_ctx: bool, reduce_ctx: bool) -> Exp
         ),
 
         // --- string ---
-        "u.concat" => Expr::Concat(call_args()),
-        "u.lower" => Expr::Lower(cbox(0)),
-        "u.upper" => Expr::Upper(cbox(0)),
-        "u.contains" => Expr::Contains(cbox(0), cbox(1)),
-        "u.template" => Expr::Template(cbox(0), args[1..].iter().map(|v| compile_expr(v, iter_ctx, reduce_ctx)).collect()),
-        "u.trim" => Expr::Trim(cbox(0)),
-        "u.str_len" => Expr::StrLen(cbox(0)),
+        "util.concat" => Expr::Concat(call_args()),
+        "util.lower" => Expr::Lower(cbox(0)),
+        "util.upper" => Expr::Upper(cbox(0)),
+        "util.contains" => Expr::Contains(cbox(0), cbox(1)),
+        "util.template" => Expr::Template(
+            cbox(0),
+            args[1..]
+                .iter()
+                .map(|v| compile_expr(v, iter_ctx, reduce_ctx))
+                .collect(),
+        ),
+        "util.trim" => Expr::Trim(cbox(0)),
+        "util.str_len" => Expr::StrLen(cbox(0)),
 
         // --- type conversion ---
-        "u.to_int" => Expr::ToInt(cbox(0)),
-        "u.to_float" => Expr::ToFloat(cbox(0)),
-        "u.to_string" => Expr::ToString(cbox(0)),
+        "util.to_int" => Expr::ToInt(cbox(0)),
+        "util.to_float" => Expr::ToFloat(cbox(0)),
+        "util.to_string" => Expr::ToString(cbox(0)),
 
         // --- collections ---
         "len" => Expr::Len(cbox(0)),
@@ -221,8 +225,22 @@ fn compile_op(op: &str, args: &[Value], iter_ctx: bool, reduce_ctx: bool) -> Exp
         }
 
         // --- iteration (tree-level) ---
-        "map" => Expr::Map(cbox(0), Box::new(compile_expr(args.get(1).unwrap_or(&Value::Null), true, false))),
-        "filter" => Expr::Filter(cbox(0), Box::new(compile_expr(args.get(1).unwrap_or(&Value::Null), true, false))),
+        "map" => Expr::Map(
+            cbox(0),
+            Box::new(compile_expr(
+                args.get(1).unwrap_or(&Value::Null),
+                true,
+                false,
+            )),
+        ),
+        "filter" => Expr::Filter(
+            cbox(0),
+            Box::new(compile_expr(
+                args.get(1).unwrap_or(&Value::Null),
+                true,
+                false,
+            )),
+        ),
 
         // --- events ---
         "w.event.value" => Expr::EventValue,
@@ -260,7 +278,10 @@ fn compile_var(args: &[Value], iter_ctx: bool, reduce_ctx: bool) -> Expr {
 }
 
 fn try_fold_add(args: Vec<Expr>) -> Expr {
-    if args.iter().all(|e| matches!(e, Expr::Literal(JVal::Int(_)))) {
+    if args
+        .iter()
+        .all(|e| matches!(e, Expr::Literal(JVal::Int(_))))
+    {
         let sum: i64 = args
             .iter()
             .map(|e| match e {
@@ -288,7 +309,10 @@ fn try_fold_add(args: Vec<Expr>) -> Expr {
 }
 
 fn try_fold_mul(args: Vec<Expr>) -> Expr {
-    if args.iter().all(|e| matches!(e, Expr::Literal(JVal::Int(_)))) {
+    if args
+        .iter()
+        .all(|e| matches!(e, Expr::Literal(JVal::Int(_))))
+    {
         let prod: i64 = args
             .iter()
             .map(|e| match e {
@@ -302,9 +326,7 @@ fn try_fold_mul(args: Vec<Expr>) -> Expr {
 }
 
 fn try_fold_mod(a: Box<Expr>, b: Box<Expr>) -> Expr {
-    if let (Expr::Literal(JVal::Int(av)), Expr::Literal(JVal::Int(bv))) =
-        (a.as_ref(), b.as_ref())
-    {
+    if let (Expr::Literal(JVal::Int(av)), Expr::Literal(JVal::Int(bv))) = (a.as_ref(), b.as_ref()) {
         if *bv != 0 {
             return Expr::Literal(JVal::Int(av.rem_euclid(*bv)));
         }

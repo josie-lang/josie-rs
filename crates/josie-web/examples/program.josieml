@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>TigerGun Todo</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-zinc-950 text-zinc-100 antialiased">
+  <main class="mx-auto max-w-3xl px-4 py-10">
+    <section class="rounded-2xl border border-zinc-800 bg-zinc-900/80 p-6 shadow-2xl shadow-black/30">
+      <header class="mb-6 space-y-1">
+        <h1 class="text-2xl font-semibold tracking-tight" j-text="client.appTitle"></h1>
+        <p class="text-sm text-zinc-400">Pure Josie runtime + Tailwind classes. No npm build.</p>
+      </header>
+
+      <form class="mb-4 flex gap-2" @submit="todo.add">
+        <input
+          type="text"
+          j-model="client.newTodo"
+          placeholder="Add a task..."
+          class="flex-1 rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm outline-none ring-0 placeholder:text-zinc-500 focus:border-cyan-500"
+        />
+        <button
+          type="submit"
+          class="rounded-xl bg-cyan-500 px-4 py-2 text-sm font-medium text-zinc-950 hover:bg-cyan-400"
+        >Add</button>
+      </form>
+
+      <div class="mb-4 grid grid-cols-3 gap-2 text-xs">
+        <div class="rounded-lg border border-zinc-700 bg-zinc-800/60 px-3 py-2">
+          <div class="text-zinc-400">Total</div>
+          <div class="mt-1 text-lg font-semibold" j-text="client.stats.total"></div>
+        </div>
+        <div class="rounded-lg border border-zinc-700 bg-zinc-800/60 px-3 py-2">
+          <div class="text-zinc-400">Done</div>
+          <div class="mt-1 text-lg font-semibold text-emerald-400" j-text="client.stats.done"></div>
+        </div>
+        <div class="rounded-lg border border-zinc-700 bg-zinc-800/60 px-3 py-2">
+          <div class="text-zinc-400">Open</div>
+          <div class="mt-1 text-lg font-semibold text-amber-300" j-text="client.stats.open"></div>
+        </div>
+      </div>
+
+      <ul class="space-y-2" data-josie-map='{"source":["var","client.viewTodos"]}'>
+        <li j-attr:class="local.item.rowClass">
+          <button
+            type="button"
+            j-attr:value="local.item.id"
+            @click="todo.toggle"
+            class="rounded-md border border-cyan-500/40 bg-cyan-500/10 px-2 py-1 text-[10px] font-semibold tracking-wide text-cyan-200 hover:border-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-100"
+            j-text="local.item.status"
+          ></button>
+
+          <p class="flex-1 text-sm" j-attr:class="local.item.titleClass" j-text="local.item.title"></p>
+
+          <button
+            type="button"
+            j-attr:value="local.item.id"
+            @click="todo.delete"
+            class="rounded-md border border-red-500/50 bg-red-500/10 px-2 py-1 text-xs text-red-200 hover:bg-red-500/20"
+          >Delete</button>
+        </li>
+      </ul>
+
+      <footer class="mt-4 flex items-center justify-between">
+        <p class="text-xs text-zinc-500">Click status badge to toggle done/open.</p>
+        <button
+          type="button"
+          @click="todo.clear_done"
+          class="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-200 hover:bg-amber-500/20 hover:text-amber-100"
+        >Clear Completed</button>
+      </footer>
+    </section>
+  </main>
+
+  <script type="application/josie+json">
+  {
+    "kind": "program",
+    "version": "0.1.0",
+    "state": {
+      "client": {
+        "appTitle": "TigerGun Todo",
+        "newTodo": "",
+        "seq": 4,
+        "todos": [
+          { "id": "1", "title": "Define pipeline contract", "done": false },
+          { "id": "2", "title": "Build webhook flow", "done": true },
+          { "id": "3", "title": "Ship project dashboard", "done": false }
+        ],
+        "stats": { "total": 3, "done": 1, "open": 2 },
+        "viewTodos": [
+          {
+            "id": "1",
+            "title": "Define pipeline contract",
+            "done": false,
+            "status": "OPEN",
+            "rowClass": "flex items-center gap-3 rounded-xl border border-zinc-700 bg-zinc-800/60 px-3 py-2",
+            "titleClass": "flex-1 text-sm text-zinc-100"
+          },
+          {
+            "id": "2",
+            "title": "Build webhook flow",
+            "done": true,
+            "status": "DONE",
+            "rowClass": "flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2",
+            "titleClass": "flex-1 text-sm text-zinc-400 line-through"
+          },
+          {
+            "id": "3",
+            "title": "Ship project dashboard",
+            "done": false,
+            "status": "OPEN",
+            "rowClass": "flex items-center gap-3 rounded-xl border border-zinc-700 bg-zinc-800/60 px-3 py-2",
+            "titleClass": "flex-1 text-sm text-zinc-100"
+          }
+        ]
+      }
+    },
+    "actions": {
+      "todo.add": {
+        "run": [
+          { "step": "todo.add.core" },
+          { "step": "todo.recalc" },
+          { "step": "todo.sync_view" }
+        ]
+      },
+      "todo.toggle": {
+        "run": [
+          { "step": "todo.toggle.core" },
+          { "step": "todo.recalc" },
+          { "step": "todo.sync_view" }
+        ]
+      },
+      "todo.delete": {
+        "run": [
+          { "step": "todo.delete.core" },
+          { "step": "todo.recalc" },
+          { "step": "todo.sync_view" }
+        ]
+      },
+      "todo.clear_done": {
+        "run": [
+          { "step": "todo.clear_done.core" },
+          { "step": "todo.recalc" },
+          { "step": "todo.sync_view" }
+        ]
+      }
+    },
+    "resources": [],
+    "steps": [
+      {
+        "id": "todo.add.core",
+        "type": "action",
+        "op": "do",
+        "args": [
+          ["w.event.prevent"],
+          [
+            "if",
+            [">", ["util.str_len", ["util.trim", ["var", "client.newTodo"]]], 0],
+            [
+              "do",
+              [
+                "set",
+                "client.todos",
+                [
+                  "push",
+                  ["var", "client.todos"],
+                  {
+                    "id": ["util.to_string", ["var", "client.seq"]],
+                    "title": ["util.trim", ["var", "client.newTodo"]],
+                    "done": false
+                  }
+                ]
+              ],
+              ["set", "client.seq", ["+", ["var", "client.seq"], 1]],
+              ["set", "client.newTodo", ""]
+            ],
+            null
+          ]
+        ]
+      },
+      {
+        "id": "todo.toggle.core",
+        "type": "action",
+        "op": "do",
+        "args": [
+          [
+            "set",
+            "client.todos",
+            [
+              "map",
+              ["var", "client.todos"],
+              {
+                "id": ["var", "item.id"],
+                "title": ["var", "item.title"],
+                "done": [
+                  "if",
+                  ["==", ["var", "item.id"], ["w.event.value"]],
+                  ["!", ["var", "item.done"]],
+                  ["var", "item.done"]
+                ]
+              }
+            ]
+          ]
+        ]
+      },
+      {
+        "id": "todo.delete.core",
+        "type": "action",
+        "op": "do",
+        "args": [
+          [
+            "set",
+            "client.todos",
+            [
+              "filter",
+              ["var", "client.todos"],
+              ["!=", ["var", "item.id"], ["w.event.value"]]
+            ]
+          ]
+        ]
+      },
+      {
+        "id": "todo.clear_done.core",
+        "type": "action",
+        "op": "do",
+        "args": [
+          [
+            "set",
+            "client.todos",
+            [
+              "filter",
+              ["var", "client.todos"],
+              ["!", ["var", "item.done"]]
+            ]
+          ]
+        ]
+      },
+      {
+        "id": "todo.recalc",
+        "type": "transform",
+        "op": "do",
+        "args": [
+          ["set", "client.stats.total", ["len", ["var", "client.todos"]]],
+          [
+            "set",
+            "client.stats.done",
+            [
+              "reduce",
+              ["var", "client.todos"],
+              ["if", ["var", "item.done"], ["+", ["var", "acc"], 1], ["var", "acc"]],
+              0
+            ]
+          ],
+          [
+            "set",
+            "client.stats.open",
+            ["-", ["var", "client.stats.total"], ["var", "client.stats.done"]]
+          ]
+        ]
+      },
+      {
+        "id": "todo.sync_view",
+        "type": "transform",
+        "op": "do",
+        "args": [
+          [
+            "set",
+            "client.viewTodos",
+            [
+              "map",
+              ["var", "client.todos"],
+              {
+                "id": ["var", "item.id"],
+                "title": ["var", "item.title"],
+                "done": ["var", "item.done"],
+                "status": ["if", ["var", "item.done"], "DONE", "OPEN"],
+                "rowClass": [
+                  "if",
+                  ["var", "item.done"],
+                  "flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2",
+                  "flex items-center gap-3 rounded-xl border border-zinc-700 bg-zinc-800/60 px-3 py-2"
+                ],
+                "titleClass": [
+                  "if",
+                  ["var", "item.done"],
+                  "flex-1 text-sm text-zinc-400 line-through",
+                  "flex-1 text-sm text-zinc-100"
+                ]
+              }
+            ]
+          ]
+        ]
+      }
+    ]
+  }
+  </script>
+</body>
+</html>

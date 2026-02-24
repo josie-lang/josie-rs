@@ -28,11 +28,12 @@
 //!
 //! | op | required fields | notes |
 //! |---|---|---|
-//! | `call` | `fn` | optional `into`, `args`, `when` |
+//! | `call` | `fn` or `from` | optional `into`, `args`, `when` |
 //! | `set` | `into`, `args[0]` | writes to runtime var or `client.*`/`server.*` |
 //! | `get` | `from` | reads `$prev`, runtime vars, or state paths |
 //! | `map`/`filter`/`for_each`/`reduce` | `from`, `do` | `reduce` optionally uses init value from `args[0]` |
 //! | `if`/`match`/`do`/`pipe` | `args` | tree-style ops executed in pipeline flow |
+//! | policy hints | `run_hint` | planner/runtime hint (`inline`/`worker`), not logic semantics |
 //!
 //! Why this improves performance:
 //!
@@ -49,6 +50,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::Instant;
 
 /// Generic host callback used by pipeline `call` integration.
 pub type HostCallFn = fn(&[Value]) -> Result<Value, RuntimeError>;
@@ -122,6 +124,10 @@ pub struct PipelineDoc {
 /// Canonical pipeline step shape used by parser and executor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineStep {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(rename = "type", default)]
+    pub step_type: Option<StepType>,
     pub op: String,
     #[serde(default)]
     pub from: Option<String>,
@@ -135,6 +141,46 @@ pub struct PipelineStep {
     pub do_expr: Option<Value>,
     #[serde(default)]
     pub when: Option<Value>,
+    #[serde(default)]
+    pub run_hint: Option<StepRunHint>,
+    #[serde(default)]
+    pub input: Option<Value>,
+    #[serde(default)]
+    pub output: Option<Value>,
+    #[serde(default)]
+    pub on_error: Option<StepOnError>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub max_retries: Option<u32>,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StepType {
+    Action,
+    Decision,
+    Transform,
+    Tool,
+    Checkpoint,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StepOnError {
+    Retry,
+    Fallback,
+    Halt,
+    Compensate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StepRunHint {
+    Inline,
+    Worker,
 }
 
 /// Structured validation error produced before execution.
@@ -265,6 +311,7 @@ pub struct ExecutionOutput {
 struct PipelineRuntime {
     vars: HashMap<String, Value>,
     prev: Value,
+    idempotency: HashMap<String, Value>,
 }
 
 impl Default for PipelineRuntime {
@@ -272,16 +319,14 @@ impl Default for PipelineRuntime {
         Self {
             vars: HashMap::new(),
             prev: Value::Null,
+            idempotency: HashMap::new(),
         }
     }
 }
 
 pub fn parse_program(input: &Value) -> Result<Program, ValidationError> {
     let program: Program = serde_json::from_value(input.clone()).map_err(|err| {
-        ValidationError::new(
-            "JOSIE_E_PARSE",
-            format!("invalid program document: {err}"),
-        )
+        ValidationError::new("JOSIE_E_PARSE", format!("invalid program document: {err}"))
     })?;
     validate_program(&program)?;
     Ok(program)
@@ -303,14 +348,16 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, ValidationE
     let body = if is_tree_expression(&program.program) {
         CompiledProgramBody::Tree(program.program.clone())
     } else {
-        let pipe: PipelineDoc =
-            serde_json::from_value(program.program.clone()).map_err(|err| {
-                ValidationError::new(
-                    "JOSIE_E_PIPE_PARSE",
-                    format!("invalid pipeline document: {err}"),
-                )
-            })?;
-        if let Some(plan) = try_compile_fast_internal(&pipe) {
+        let pipe: PipelineDoc = serde_json::from_value(program.program.clone()).map_err(|err| {
+            ValidationError::new(
+                "JOSIE_E_PIPE_PARSE",
+                format!("invalid pipeline document: {err}"),
+            )
+        })?;
+        // Keep fast plans only for policy-free steps so semantics stay exact.
+        if pipe.steps.iter().any(has_step_execution_policy) {
+            CompiledProgramBody::CompiledPipeline(compile_pipeline_steps(&pipe))
+        } else if let Some(plan) = try_compile_fast_internal(&pipe) {
             CompiledProgramBody::FastInternal(plan)
         } else if let Some(plan) = try_compile_fast_external_map(&pipe) {
             CompiledProgramBody::FastExternalMapI64(plan)
@@ -333,14 +380,12 @@ fn compile_pipeline_steps(pipe: &PipelineDoc) -> Vec<CompiledPipelineStep> {
         .iter()
         .map(|step| {
             let is_reduce = step.op == "reduce";
-            let is_iter = matches!(
-                step.op.as_str(),
-                "map" | "filter" | "for_each" | "reduce"
-            );
+            let is_iter = matches!(step.op.as_str(), "map" | "filter" | "for_each" | "reduce");
 
-            let compiled_do = step.do_expr.as_ref().map(|expr| {
-                compile_do_expr(expr, is_iter, is_reduce)
-            });
+            let compiled_do = step
+                .do_expr
+                .as_ref()
+                .map(|expr| compile_do_expr(expr, is_iter, is_reduce));
             let compiled_when = step
                 .when
                 .as_ref()
@@ -367,7 +412,11 @@ fn compile_do_expr(expr: &Value, iter_ctx: bool, reduce_ctx: bool) -> Expr {
     if let Some(obj) = expr.as_object() {
         if let Some(op) = obj.get("op").and_then(|v| v.as_str()) {
             if op == "call" {
-                if let Some(fn_name) = obj.get("fn").and_then(|v| v.as_str()) {
+                let fn_name = obj
+                    .get("fn")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| obj.get("from").and_then(|v| v.as_str()));
+                if let Some(fn_name) = fn_name {
                     let args: Vec<Expr> = obj
                         .get("args")
                         .and_then(|v| v.as_array())
@@ -403,9 +452,8 @@ pub fn execute_program_with_hosts(
     operators: &Operators,
     hosts: &HostFunctions,
 ) -> Result<ExecutionOutput, RuntimeError> {
-    let compiled = compile_program(program).map_err(|err| {
-        RuntimeError::new(err.code, err.message).step_opt(err.step_index, err.op)
-    })?;
+    let compiled = compile_program(program)
+        .map_err(|err| RuntimeError::new(err.code, err.message).step_opt(err.step_index, err.op))?;
     let mut state = state_from_value(&compiled.initial_state);
     let value = execute_compiled_program_with_hosts(&compiled, &mut state, operators, hosts)?;
     Ok(ExecutionOutput { value, state })
@@ -495,18 +543,67 @@ fn execute_compiled_pipeline(
         // Evaluate 'when' guard
         if let Some(when_expr) = &cs.compiled_when {
             let empty = IterLocals::empty();
-            let when_val = eval_expr(when_expr, &empty, state, operators)
-                .map_err(RuntimeError::from)?;
+            let when_val =
+                eval_expr(when_expr, &empty, state, operators).map_err(RuntimeError::from)?;
             if !when_val.is_truthy() {
                 continue;
             }
         }
 
-        let value = execute_compiled_step(cs, state, operators, hosts, &mut runtime)
+        let value = execute_compiled_step_with_policy(cs, state, operators, hosts, &mut runtime)
             .map_err(|err| err.step(idx, cs.step.op.clone()))?;
         write_target(cs.step.into.as_deref(), value, state, &mut runtime)?;
+        if cs.step.op == "return" {
+            break;
+        }
     }
     Ok(runtime.prev)
+}
+
+fn execute_compiled_step_with_policy(
+    cs: &CompiledPipelineStep,
+    state: &mut State,
+    operators: &Operators,
+    hosts: &HostFunctions,
+    runtime: &mut PipelineRuntime,
+) -> Result<Value, RuntimeError> {
+    if let Some(key) = cs.step.idempotency_key.as_ref()
+        && let Some(cached) = runtime.idempotency.get(key)
+    {
+        return Ok(cached.clone());
+    }
+
+    let timeout_ms = cs.step.timeout_ms;
+    let on_error = cs.step.on_error.unwrap_or(StepOnError::Halt);
+    let max_retries = cs.step.max_retries.unwrap_or(0);
+    let mut attempts = 0u32;
+    loop {
+        attempts = attempts.saturating_add(1);
+        let started = Instant::now();
+        let mut out = execute_compiled_step(cs, state, operators, hosts, runtime);
+        if let Some(limit_ms) = timeout_ms
+            && started.elapsed().as_millis() as u64 > limit_ms
+        {
+            out = Err(RuntimeError::new(
+                "JOSIE_E_STEP_TIMEOUT",
+                format!("step exceeded timeout_ms={limit_ms}"),
+            ));
+        }
+
+        match out {
+            Ok(v) => {
+                if let Some(key) = cs.step.idempotency_key.as_ref() {
+                    runtime.idempotency.insert(key.clone(), v.clone());
+                }
+                return Ok(v);
+            }
+            Err(err) => match on_error {
+                StepOnError::Retry if attempts <= max_retries => continue,
+                StepOnError::Fallback | StepOnError::Compensate => return Ok(Value::Null),
+                StepOnError::Retry | StepOnError::Halt => return Err(err),
+            },
+        }
+    }
 }
 
 fn execute_compiled_step(
@@ -520,18 +617,29 @@ fn execute_compiled_step(
 
     match step.op.as_str() {
         "set" => {
-            let expr = cs.compiled_args.first().ok_or_else(|| {
-                RuntimeError::new("JOSIE_E_SET_ARGS", "set step requires args")
-            })?;
+            // Object literals can contain nested dynamic arrays such as
+            // {"title":["var","server.input.title"]}. Compiled Expr currently
+            // treats objects as literals, so evaluate object args through the
+            // dynamic evaluator to preserve runtime semantics.
+            if let Some(arg0) = step.args.first()
+                && arg0.is_object()
+            {
+                return eval_dynamic(arg0, state, operators, hosts, runtime);
+            }
+            let expr = cs
+                .compiled_args
+                .first()
+                .ok_or_else(|| RuntimeError::new("JOSIE_E_SET_ARGS", "set step requires args"))?;
             let empty = IterLocals::empty();
             let jval = eval_expr(expr, &empty, state, operators).map_err(RuntimeError::from)?;
             Ok(Value::from(jval))
         }
 
         "get" => {
-            let from = step.from.as_deref().ok_or_else(|| {
-                RuntimeError::new("JOSIE_E_GET_FROM", "get step requires 'from'")
-            })?;
+            let from = step
+                .from
+                .as_deref()
+                .ok_or_else(|| RuntimeError::new("JOSIE_E_GET_FROM", "get step requires 'from'"))?;
             read_ref(from, state, runtime)
         }
 
@@ -539,14 +647,15 @@ fn execute_compiled_step(
 
         "map" => {
             let input = read_from_array(step, state, runtime)?;
-            let compiled_do = cs.compiled_do.as_ref().ok_or_else(|| {
-                RuntimeError::new("JOSIE_E_ITER_DO", "map step requires 'do'")
-            })?;
+            let compiled_do = cs
+                .compiled_do
+                .as_ref()
+                .ok_or_else(|| RuntimeError::new("JOSIE_E_ITER_DO", "map step requires 'do'"))?;
             let mut out = Vec::with_capacity(input.len());
             for (index, item) in input.iter().enumerate() {
                 let locals = IterLocals::new(JVal::from(item.clone()), index as i64);
-                let result =
-                    eval_expr(compiled_do, &locals, state, operators).map_err(RuntimeError::from)?;
+                let result = eval_expr(compiled_do, &locals, state, operators)
+                    .map_err(RuntimeError::from)?;
                 out.push(Value::from(result));
             }
             Ok(Value::Array(out))
@@ -554,14 +663,15 @@ fn execute_compiled_step(
 
         "filter" => {
             let input = read_from_array(step, state, runtime)?;
-            let compiled_do = cs.compiled_do.as_ref().ok_or_else(|| {
-                RuntimeError::new("JOSIE_E_ITER_DO", "filter step requires 'do'")
-            })?;
+            let compiled_do = cs
+                .compiled_do
+                .as_ref()
+                .ok_or_else(|| RuntimeError::new("JOSIE_E_ITER_DO", "filter step requires 'do'"))?;
             let mut out = Vec::new();
             for (index, item) in input.iter().enumerate() {
                 let locals = IterLocals::new(JVal::from(item.clone()), index as i64);
-                let result =
-                    eval_expr(compiled_do, &locals, state, operators).map_err(RuntimeError::from)?;
+                let result = eval_expr(compiled_do, &locals, state, operators)
+                    .map_err(RuntimeError::from)?;
                 if result.is_truthy() {
                     out.push(item.clone());
                 }
@@ -596,8 +706,8 @@ fn execute_compiled_step(
 
             for (index, item) in input.iter().enumerate() {
                 let locals = IterLocals::new(JVal::from(item.clone()), index as i64);
-                let result =
-                    eval_expr(compiled_do, &locals, state, operators).map_err(RuntimeError::from)?;
+                let result = eval_expr(compiled_do, &locals, state, operators)
+                    .map_err(RuntimeError::from)?;
                 let val = Value::from(result);
                 last = val.clone();
                 out.push(val);
@@ -611,14 +721,14 @@ fn execute_compiled_step(
 
         "reduce" => {
             let input = read_from_array(step, state, runtime)?;
-            let compiled_do = cs.compiled_do.as_ref().ok_or_else(|| {
-                RuntimeError::new("JOSIE_E_ITER_DO", "reduce step requires 'do'")
-            })?;
+            let compiled_do = cs
+                .compiled_do
+                .as_ref()
+                .ok_or_else(|| RuntimeError::new("JOSIE_E_ITER_DO", "reduce step requires 'do'"))?;
 
             let mut acc = if let Some(init_expr) = cs.compiled_args.first() {
                 let empty = IterLocals::empty();
-                eval_expr(init_expr, &empty, state, operators)
-                    .map_err(RuntimeError::from)?
+                eval_expr(init_expr, &empty, state, operators).map_err(RuntimeError::from)?
             } else {
                 JVal::Null
             };
@@ -637,6 +747,10 @@ fn execute_compiled_step(
             tree.push(Value::String(step.op.clone()));
             tree.extend(step.args.clone());
             eval_tree(&Value::Array(tree), state, operators)
+        }
+        "return" => {
+            let from = step.from.as_deref().unwrap_or("$prev");
+            read_ref(from, state, runtime)
         }
 
         other => Err(RuntimeError::new(
@@ -694,6 +808,39 @@ pub fn validate_pipeline(pipe: &PipelineDoc) -> Result<(), ValidationError> {
 }
 
 fn validate_step(step: &PipelineStep) -> Result<(), ValidationError> {
+    if let Some(id) = step.id.as_deref()
+        && id.trim().is_empty()
+    {
+        return Err(ValidationError::new(
+            "JOSIE_E_STEP_ID",
+            "step id must not be empty",
+        ));
+    }
+    if let Some(input_schema) = step.input.as_ref()
+        && !input_schema.is_object()
+    {
+        return Err(ValidationError::new(
+            "JOSIE_E_STEP_INPUT_SCHEMA",
+            "step input schema must be an object",
+        ));
+    }
+    if let Some(output_schema) = step.output.as_ref()
+        && !output_schema.is_object()
+    {
+        return Err(ValidationError::new(
+            "JOSIE_E_STEP_OUTPUT_SCHEMA",
+            "step output schema must be an object",
+        ));
+    }
+    if let Some(idempotency_key) = step.idempotency_key.as_deref()
+        && idempotency_key.trim().is_empty()
+    {
+        return Err(ValidationError::new(
+            "JOSIE_E_STEP_IDEMPOTENCY",
+            "step idempotency_key must not be empty",
+        ));
+    }
+
     if step.op.trim().is_empty() {
         return Err(ValidationError::new(
             "JOSIE_E_STEP_OP",
@@ -714,6 +861,7 @@ fn validate_step(step: &PipelineStep) -> Result<(), ValidationError> {
             | "match"
             | "do"
             | "pipe"
+            | "return"
     );
 
     if !known_op {
@@ -725,10 +873,15 @@ fn validate_step(step: &PipelineStep) -> Result<(), ValidationError> {
 
     match step.op.as_str() {
         "call" => {
-            if step.fn_name.as_deref().unwrap_or_default().is_empty() {
+            let call_target = step
+                .fn_name
+                .as_deref()
+                .or(step.from.as_deref())
+                .unwrap_or_default();
+            if call_target.is_empty() {
                 return Err(ValidationError::new(
                     "JOSIE_E_CALL_FN",
-                    "call step requires non-empty fn",
+                    "call step requires non-empty fn/from",
                 ));
             }
         }
@@ -760,10 +913,32 @@ fn validate_step(step: &PipelineStep) -> Result<(), ValidationError> {
                 ));
             }
         }
+        "return" => {
+            if let Some(from) = step.from.as_deref()
+                && from.trim().is_empty()
+            {
+                return Err(ValidationError::new(
+                    "JOSIE_E_RETURN_FROM",
+                    "return step 'from' must not be empty",
+                ));
+            }
+        }
         _ => {}
     }
 
     Ok(())
+}
+
+fn has_step_execution_policy(step: &PipelineStep) -> bool {
+    step.id.is_some()
+        || step.step_type.is_some()
+        || step.run_hint.is_some()
+        || step.input.is_some()
+        || step.output.is_some()
+        || step.on_error.is_some()
+        || step.timeout_ms.is_some()
+        || step.max_retries.is_some()
+        || step.idempotency_key.is_some()
 }
 
 /// Try to detect and compile the external typed-host pattern:
@@ -784,7 +959,7 @@ fn try_compile_fast_external_map(pipe: &PipelineDoc) -> Option<FastExternalMapPl
     if s0.when.is_some() || s1.when.is_some() {
         return None;
     }
-    let fn_a = s0.fn_name.as_ref()?.to_string();
+    let fn_a = s0.fn_name.as_ref().or(s0.from.as_ref())?.to_string();
     let result_a_name = s0.into.as_ref()?.to_string();
     if s1.from.as_deref()? != result_a_name {
         return None;
@@ -794,7 +969,11 @@ fn try_compile_fast_external_map(pipe: &PipelineDoc) -> Option<FastExternalMapPl
     if do_obj.get("op").and_then(|v| v.as_str())? != "call" {
         return None;
     }
-    let fn_b = do_obj.get("fn").and_then(|v| v.as_str())?.to_string();
+    let fn_b = do_obj
+        .get("fn")
+        .and_then(|v| v.as_str())
+        .or_else(|| do_obj.get("from").and_then(|v| v.as_str()))?
+        .to_string();
     let args = do_obj.get("args").and_then(|v| v.as_array())?;
     if args.len() != 1 {
         return None;
@@ -857,7 +1036,7 @@ fn try_compile_fast_internal(pipe: &PipelineDoc) -> Option<FastInternalPlan> {
         });
     }
 
-    // exp03: nums -> map math -> filter hot -> for_each u.str_len -> reduce lens
+    // exp03: nums -> map math -> filter hot -> for_each util.str_len -> reduce lens
     if pipe.steps.len() == 5
         && is_map_math_step(pipe.steps.get(1)?)
         && is_filter_hot_step(pipe.steps.get(2)?)
@@ -965,7 +1144,11 @@ fn is_map_math_step(step: &PipelineStep) -> bool {
         && step.do_expr
             == Some(json!([
                 "%",
-                ["+", ["*", ["var", "item"], ["var", "item"]], ["%", ["var", "index"], 7]],
+                [
+                    "+",
+                    ["*", ["var", "item"], ["var", "item"]],
+                    ["%", ["var", "index"], 7]
+                ],
                 997
             ]))
 }
@@ -996,12 +1179,15 @@ fn is_for_each_t_len_step(step: &PipelineStep) -> bool {
         && step.into.as_deref() == Some("lens")
         && step.do_expr
             == Some(json!([
-                "u.to_int",
+                "util.to_int",
                 [
-                    "u.to_string",
+                    "util.to_string",
                     [
-                        "u.str_len",
-                        ["u.trim", ["u.concat", "  v", ["u.to_string", ["var", "item"]], "  "]]
+                        "util.str_len",
+                        [
+                            "util.trim",
+                            ["util.concat", "  v", ["util.to_string", ["var", "item"]], "  "]
+                        ]
                     ]
                 ]
             ]))
@@ -1047,19 +1233,21 @@ fn is_for_each_template_len_step(step: &PipelineStep) -> bool {
         && step.into.as_deref() == Some("lens")
         && step.do_expr
             == Some(json!([
-                "u.str_len",
+                "util.str_len",
                 [
-                    "u.concat",
+                    "util.concat",
                     "ID-",
-                    ["u.to_string", ["var", "item"]],
+                    ["util.to_string", ["var", "item"]],
                     "-",
-                    ["u.to_string", ["%", ["var", "item"], 7]]
+                    ["util.to_string", ["%", ["var", "item"], 7]]
                 ]
             ]))
 }
 
 fn parse_map_reduce_p1_step(step: &PipelineStep) -> Option<i64> {
-    if step.op != "map" || step.from.as_deref() != Some("nums") || step.into.as_deref() != Some("mapped")
+    if step.op != "map"
+        || step.from.as_deref() != Some("nums")
+        || step.into.as_deref() != Some("mapped")
     {
         return None;
     }
@@ -1127,7 +1315,10 @@ fn is_for_each_mixed_step(step: &PipelineStep) -> bool {
         && step.do_expr
             == Some(json!([
                 "+",
-                ["u.str_len", ["u.concat", "x", ["u.to_string", ["var", "item"]]]],
+                [
+                    "util.str_len",
+                    ["util.concat", "x", ["util.to_string", ["var", "item"]]]
+                ],
                 ["if", [">", ["var", "item"], 200], 5, 1]
             ]))
 }
@@ -1137,6 +1328,8 @@ fn plan_to_pipeline_doc(plan: &FastExternalMapPlan) -> PipelineDoc {
         doc_type: "pipeline".to_string(),
         steps: vec![
             PipelineStep {
+                id: None,
+                step_type: None,
                 op: "call".to_string(),
                 from: None,
                 into: Some("result_a".to_string()),
@@ -1144,8 +1337,17 @@ fn plan_to_pipeline_doc(plan: &FastExternalMapPlan) -> PipelineDoc {
                 args: vec![json!(plan.p1), json!(plan.p2), json!(plan.size)],
                 do_expr: None,
                 when: None,
+                run_hint: None,
+                input: None,
+                output: None,
+                on_error: None,
+                timeout_ms: None,
+                max_retries: None,
+                idempotency_key: None,
             },
             PipelineStep {
+                id: None,
+                step_type: None,
                 op: "for_each".to_string(),
                 from: Some("result_a".to_string()),
                 into: Some("result_b".to_string()),
@@ -1157,6 +1359,13 @@ fn plan_to_pipeline_doc(plan: &FastExternalMapPlan) -> PipelineDoc {
                   "args": [["var","item"]]
                 })),
                 when: None,
+                run_hint: None,
+                input: None,
+                output: None,
+                on_error: None,
+                timeout_ms: None,
+                max_retries: None,
+                idempotency_key: None,
             },
         ],
     }
@@ -1165,7 +1374,10 @@ fn plan_to_pipeline_doc(plan: &FastExternalMapPlan) -> PipelineDoc {
 /// Execute a specialized internal plan as a tight Rust loop.
 ///
 /// This path avoids dynamic node dispatch and minimizes JSON allocations.
-fn execute_fast_internal(plan: &FastInternalPlan, state: &mut State) -> Result<Value, RuntimeError> {
+fn execute_fast_internal(
+    plan: &FastInternalPlan,
+    state: &mut State,
+) -> Result<Value, RuntimeError> {
     let mut score = 0i64;
     for index in 0..plan.size {
         let item = (index + 1) as i64;
@@ -1297,11 +1509,59 @@ fn execute_pipeline(
                 continue;
             }
         }
-        let value = execute_step(step, state, operators, hosts, &mut runtime)
+        let value = execute_step_with_policy(step, state, operators, hosts, &mut runtime)
             .map_err(|err| err.step(idx, step.op.clone()))?;
         write_target(step.into.as_deref(), value, state, &mut runtime)?;
+        if step.op == "return" {
+            break;
+        }
     }
     Ok(runtime.prev)
+}
+
+fn execute_step_with_policy(
+    step: &PipelineStep,
+    state: &mut State,
+    operators: &Operators,
+    hosts: &HostFunctions,
+    runtime: &mut PipelineRuntime,
+) -> Result<Value, RuntimeError> {
+    if let Some(key) = step.idempotency_key.as_ref()
+        && let Some(cached) = runtime.idempotency.get(key)
+    {
+        return Ok(cached.clone());
+    }
+
+    let timeout_ms = step.timeout_ms;
+    let on_error = step.on_error.unwrap_or(StepOnError::Halt);
+    let max_retries = step.max_retries.unwrap_or(0);
+    let mut attempts = 0u32;
+    loop {
+        attempts = attempts.saturating_add(1);
+        let started = Instant::now();
+        let mut out = execute_step(step, state, operators, hosts, runtime);
+        if let Some(limit_ms) = timeout_ms
+            && started.elapsed().as_millis() as u64 > limit_ms
+        {
+            out = Err(RuntimeError::new(
+                "JOSIE_E_STEP_TIMEOUT",
+                format!("step exceeded timeout_ms={limit_ms}"),
+            ));
+        }
+        match out {
+            Ok(v) => {
+                if let Some(key) = step.idempotency_key.as_ref() {
+                    runtime.idempotency.insert(key.clone(), v.clone());
+                }
+                return Ok(v);
+            }
+            Err(err) => match on_error {
+                StepOnError::Retry if attempts <= max_retries => continue,
+                StepOnError::Fallback | StepOnError::Compensate => return Ok(Value::Null),
+                StepOnError::Retry | StepOnError::Halt => return Err(err),
+            },
+        }
+    }
 }
 
 fn execute_step(
@@ -1323,9 +1583,10 @@ fn execute_step(
             eval_dynamic(value_expr, state, operators, hosts, runtime)
         }
         "get" => {
-            let from = step.from.as_deref().ok_or_else(|| {
-                RuntimeError::new("JOSIE_E_GET_FROM", "get step requires 'from'")
-            })?;
+            let from = step
+                .from
+                .as_deref()
+                .ok_or_else(|| RuntimeError::new("JOSIE_E_GET_FROM", "get step requires 'from'"))?;
             read_ref(from, state, runtime)
         }
         "map" => {
@@ -1473,6 +1734,10 @@ fn execute_step(
             tree.extend(step.args.clone());
             eval_tree(&Value::Array(tree), state, operators)
         }
+        "return" => {
+            let from = step.from.as_deref().unwrap_or("$prev");
+            read_ref(from, state, runtime)
+        }
         other => Err(RuntimeError::new(
             "JOSIE_E_STEP_UNKNOWN_OP",
             format!("unsupported step op '{other}'"),
@@ -1490,7 +1755,8 @@ fn execute_call_step(
     let fn_name = step
         .fn_name
         .as_deref()
-        .ok_or_else(|| RuntimeError::new("JOSIE_E_CALL_FN", "call step requires fn"))?;
+        .or(step.from.as_deref())
+        .ok_or_else(|| RuntimeError::new("JOSIE_E_CALL_FN", "call step requires fn/from"))?;
 
     if let Some(host_generate) = hosts.get_generate_i64(fn_name) {
         if step.args.len() == 3 {
@@ -1647,6 +1913,16 @@ fn eval_dynamic(
         })?;
         return execute_step(&step, state, operators, hosts, runtime);
     }
+    if let Some(obj) = expr.as_object() {
+        // Keep object-literal ergonomics consistent with tree evaluator:
+        // nested arrays inside object fields are treated as dynamic expressions.
+        let mut out = Map::with_capacity(obj.len());
+        for (key, value) in obj {
+            let next = eval_dynamic(value, state, operators, hosts, runtime)?;
+            out.insert(key.clone(), next);
+        }
+        return Ok(Value::Object(out));
+    }
     Ok(expr.clone())
 }
 
@@ -1683,11 +1959,7 @@ fn write_target(
     Ok(())
 }
 
-fn read_ref(
-    target: &str,
-    state: &State,
-    runtime: &PipelineRuntime,
-) -> Result<Value, RuntimeError> {
+fn read_ref(target: &str, state: &State, runtime: &PipelineRuntime) -> Result<Value, RuntimeError> {
     if target == "$prev" {
         return Ok(runtime.prev.clone());
     }
@@ -1835,6 +2107,10 @@ mod tests {
     use super::*;
     use crate::Operators;
     use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static RETRY_COUNTER: AtomicUsize = AtomicUsize::new(0);
+    static IDEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     fn op_ext_a(args: &[Value], _ctx: &mut Context) -> Result<Value, EvalError> {
         let p1 = args.first().and_then(|v| v.as_i64()).unwrap_or(0);
@@ -1864,6 +2140,19 @@ mod tests {
         (item * 3 + 1) % 101
     }
 
+    fn host_fail_once(_args: &[Value]) -> Result<Value, RuntimeError> {
+        let n = RETRY_COUNTER.fetch_add(1, Ordering::SeqCst);
+        if n == 0 {
+            return Err(RuntimeError::new("JOSIE_E_TEST_FAIL", "fail once"));
+        }
+        Ok(json!("ok"))
+    }
+
+    fn host_counter(_args: &[Value]) -> Result<Value, RuntimeError> {
+        let n = IDEMP_COUNTER.fetch_add(1, Ordering::SeqCst) + 1;
+        Ok(json!(n))
+    }
+
     #[test]
     fn parse_pipeline_ok() {
         let node = json!({
@@ -1879,6 +2168,22 @@ mod tests {
         });
         let parsed = parse_program(&node);
         assert!(parsed.is_ok());
+    }
+
+    #[test]
+    fn parse_pipeline_accepts_run_hint() {
+        let node = json!({
+          "state": {"client": {}, "server": {}},
+          "program": {
+            "type": "pipeline",
+            "steps": [
+              {"op":"call", "fn":"x.a", "args":[1], "into":"out", "run_hint":"worker"}
+            ]
+          }
+        });
+        let parsed = parse_program(&node).expect("parse");
+        let pipe: PipelineDoc = serde_json::from_value(parsed.program).expect("pipe");
+        assert_eq!(pipe.steps[0].run_hint, Some(StepRunHint::Worker));
     }
 
     #[test]
@@ -1930,10 +2235,10 @@ mod tests {
     }
 
     #[test]
-    fn execute_tree_with_u_namespace() {
+    fn execute_tree_with_util_namespace() {
         let node = json!({
           "v": 2,
-          "program": ["u.str_len", ["u.to_string", 1234]]
+          "program": ["util.str_len", ["util.to_string", 1234]]
         });
         let program = parse_program(&node).expect("parse");
         let operators = Operators::new();
@@ -1966,5 +2271,78 @@ mod tests {
                 .expect("fast metrics");
         assert_eq!(len, 5);
         assert!(checksum > 0);
+    }
+
+    #[test]
+    fn execute_pipeline_retry_policy_works() {
+        RETRY_COUNTER.store(0, Ordering::SeqCst);
+        let node = json!({
+          "state": {"client": {}, "server": {}},
+          "program": {
+            "type": "pipeline",
+            "steps": [
+              {
+                "id": "retry-step",
+                "type": "action",
+                "op":"call",
+                "fn":"x.fail_once",
+                "on_error":"retry",
+                "max_retries": 1,
+                "into":"r"
+              },
+              {"op":"return", "from":"r"}
+            ]
+          }
+        });
+        let program = parse_program(&node).expect("parse");
+        let mut hosts = HostFunctions::new();
+        hosts.register_call("x.fail_once", host_fail_once);
+        let operators = Operators::new();
+        let out = execute_program_with_hosts(&program, &operators, &hosts).expect("execute");
+        assert_eq!(out.value, json!("ok"));
+        assert_eq!(RETRY_COUNTER.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn execute_pipeline_idempotency_key_skips_duplicate_step() {
+        IDEMP_COUNTER.store(0, Ordering::SeqCst);
+        let node = json!({
+          "state": {"client": {}, "server": {}},
+          "program": {
+            "type": "pipeline",
+            "steps": [
+              {"op":"call", "fn":"x.counter", "idempotency_key":"job-42", "into":"a"},
+              {"op":"call", "fn":"x.counter", "idempotency_key":"job-42", "into":"b"},
+              {"op":"return", "from":"b"}
+            ]
+          }
+        });
+        let program = parse_program(&node).expect("parse");
+        let mut hosts = HostFunctions::new();
+        hosts.register_call("x.counter", host_counter);
+        let operators = Operators::new();
+        let out = execute_program_with_hosts(&program, &operators, &hosts).expect("execute");
+        assert_eq!(out.value, json!(1));
+        assert_eq!(IDEMP_COUNTER.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn set_step_evaluates_nested_object_expressions() {
+        let node = json!({
+          "state": {"client": {}, "server": {"input": {"title": "Hello", "slug": "hello"}}},
+          "program": {
+            "type": "pipeline",
+            "steps": [
+              {"op":"set","into":"row","args":[
+                {"title":["var","server.input.title"],"slug":["var","server.input.slug"]}
+              ]},
+              {"op":"return","from":"row"}
+            ]
+          }
+        });
+        let program = parse_program(&node).expect("parse");
+        let operators = Operators::new();
+        let out = execute_program(&program, &operators).expect("execute");
+        assert_eq!(out.value, json!({"title":"Hello","slug":"hello"}));
     }
 }

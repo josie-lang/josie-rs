@@ -4,7 +4,7 @@
 //! It avoids runtime string operator dispatch by matching over enum variants.
 
 use crate::compiler::Expr;
-use crate::jval::{format_f64, JVal};
+use crate::jval::{JVal, format_f64};
 use crate::runtime::{Context, EvalError, Operators, State};
 use serde_json::Value;
 use std::rc::Rc;
@@ -195,32 +195,28 @@ pub fn eval_expr(
             let av = eval_expr(a, locals, state, operators)?;
             let bv = eval_expr(b, locals, state, operators)?;
             Ok(JVal::Bool(
-                av.cmp_numeric_or_string(&bv)
-                    .is_some_and(|o| o.is_gt()),
+                av.cmp_numeric_or_string(&bv).is_some_and(|o| o.is_gt()),
             ))
         }
         Expr::Lt(a, b) => {
             let av = eval_expr(a, locals, state, operators)?;
             let bv = eval_expr(b, locals, state, operators)?;
             Ok(JVal::Bool(
-                av.cmp_numeric_or_string(&bv)
-                    .is_some_and(|o| o.is_lt()),
+                av.cmp_numeric_or_string(&bv).is_some_and(|o| o.is_lt()),
             ))
         }
         Expr::Gte(a, b) => {
             let av = eval_expr(a, locals, state, operators)?;
             let bv = eval_expr(b, locals, state, operators)?;
             Ok(JVal::Bool(
-                av.cmp_numeric_or_string(&bv)
-                    .is_some_and(|o| !o.is_lt()),
+                av.cmp_numeric_or_string(&bv).is_some_and(|o| !o.is_lt()),
             ))
         }
         Expr::Lte(a, b) => {
             let av = eval_expr(a, locals, state, operators)?;
             let bv = eval_expr(b, locals, state, operators)?;
             Ok(JVal::Bool(
-                av.cmp_numeric_or_string(&bv)
-                    .is_some_and(|o| !o.is_gt()),
+                av.cmp_numeric_or_string(&bv).is_some_and(|o| !o.is_gt()),
             ))
         }
 
@@ -270,10 +266,13 @@ pub fn eval_expr(
         }
         Expr::Trim(a) => {
             let v = eval_expr(a, locals, state, operators)?;
-            Ok(JVal::Str(Rc::from(match &v {
-                JVal::Str(s) => s.trim().to_string(),
-                other => other.display_string().trim().to_string(),
-            }.as_str())))
+            Ok(JVal::Str(Rc::from(
+                match &v {
+                    JVal::Str(s) => s.trim().to_string(),
+                    other => other.display_string().trim().to_string(),
+                }
+                .as_str(),
+            )))
         }
         Expr::StrLen(a) => {
             let v = eval_expr(a, locals, state, operators)?;
@@ -285,17 +284,23 @@ pub fn eval_expr(
         }
         Expr::Lower(a) => {
             let v = eval_expr(a, locals, state, operators)?;
-            Ok(JVal::Str(Rc::from(match &v {
-                JVal::Str(s) => s.to_lowercase(),
-                other => other.display_string().to_lowercase(),
-            }.as_str())))
+            Ok(JVal::Str(Rc::from(
+                match &v {
+                    JVal::Str(s) => s.to_lowercase(),
+                    other => other.display_string().to_lowercase(),
+                }
+                .as_str(),
+            )))
         }
         Expr::Upper(a) => {
             let v = eval_expr(a, locals, state, operators)?;
-            Ok(JVal::Str(Rc::from(match &v {
-                JVal::Str(s) => s.to_uppercase(),
-                other => other.display_string().to_uppercase(),
-            }.as_str())))
+            Ok(JVal::Str(Rc::from(
+                match &v {
+                    JVal::Str(s) => s.to_uppercase(),
+                    other => other.display_string().to_uppercase(),
+                }
+                .as_str(),
+            )))
         }
         Expr::Contains(hay, needle) => {
             let h = eval_expr(hay, locals, state, operators)?;
@@ -334,14 +339,17 @@ pub fn eval_expr(
         }
         Expr::ToString(a) => {
             let v = eval_expr(a, locals, state, operators)?;
-            Ok(JVal::Str(Rc::from(match v {
-                JVal::Str(s) => return Ok(JVal::Str(s)),
-                JVal::Null => String::new(),
-                JVal::Int(n) => n.to_string(),
-                JVal::Float(f) => format_f64(f),
-                JVal::Bool(b) => b.to_string(),
-                other => other.display_string(),
-            }.as_str())))
+            Ok(JVal::Str(Rc::from(
+                match v {
+                    JVal::Str(s) => return Ok(JVal::Str(s)),
+                    JVal::Null => String::new(),
+                    JVal::Int(n) => n.to_string(),
+                    JVal::Float(f) => format_f64(f),
+                    JVal::Bool(b) => b.to_string(),
+                    other => other.display_string(),
+                }
+                .as_str(),
+            )))
         }
 
         // === Collections ===
@@ -516,9 +524,13 @@ fn jval_write_str(v: &JVal, out: &mut String) {
     match v {
         JVal::Str(s) => out.push_str(s),
         JVal::Null => {}
-        JVal::Int(n) => { let _ = write!(out, "{n}"); }
+        JVal::Int(n) => {
+            let _ = write!(out, "{n}");
+        }
         JVal::Float(f) => out.push_str(&format_f64(*f)),
-        JVal::Bool(b) => { let _ = write!(out, "{b}"); }
+        JVal::Bool(b) => {
+            let _ = write!(out, "{b}");
+        }
         other => out.push_str(&other.display_string()),
     }
 }
@@ -534,10 +546,7 @@ fn read_state_jval(state: &State, path: &str) -> Option<JVal> {
     map_get_jval(&state.client, path).or_else(|| map_get_jval(&state.server, path))
 }
 
-fn map_get_jval(
-    map: &serde_json::Map<String, Value>,
-    path: &str,
-) -> Option<JVal> {
+fn map_get_jval(map: &serde_json::Map<String, Value>, path: &str) -> Option<JVal> {
     if path.is_empty() {
         return Some(JVal::from(Value::Object(map.clone())));
     }
@@ -583,7 +592,9 @@ fn write_state_jval(state: &mut State, path: &str, value: JVal) {
         use serde_json::Map;
         fn set_nested(map: &mut Map<String, Value>, path: &str, value: Value) {
             let parts: Vec<&str> = path.split('.').filter(|p| !p.is_empty()).collect();
-            if parts.is_empty() { return; }
+            if parts.is_empty() {
+                return;
+            }
             let mut current = map;
             for part in &parts[..parts.len().saturating_sub(1)] {
                 let entry = current
