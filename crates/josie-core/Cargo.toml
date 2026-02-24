@@ -1,6 +1,6 @@
 [package]
 name = "josie-core"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
@@ -12,6 +12,18 @@ readme = "README.md"
 description = "High-performance core runtime for JOSIE (JSON Omni Safe Interactive Expressions), with deterministic tree-based pipeline execution and embeddable operator/function registries."
 keywords = ["josie", "json", "interpreter", "pipeline", "runtime"]
 categories = ["compilers", "parser-implementations", "development-tools"]
+
+[[example]]
+name = "run_josie"
+path = "examples/run_josie.rs"
+
+[[example]]
+name = "run_data_eng"
+path = "examples/run_data_eng.rs"
+
+[[example]]
+name = "run_backend"
+path = "examples/run_backend.rs"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

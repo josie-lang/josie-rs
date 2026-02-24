@@ -1,0 +1,4 @@
+# Math: set numbers and compute sum
+(set client.a 10)
+(set client.b 20)
+(set client.sum (+ client.a client.b))

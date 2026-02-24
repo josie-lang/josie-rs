@@ -1,0 +1,8 @@
+# Factorial: def + call, then set result
+(def fact (n)
+  (if (<= n 1)
+      1
+      (* n (call fact (- n 1)))))
+
+(set client.n 5)
+(set client.result (call fact client.n))

@@ -1,0 +1,8 @@
+# Data wrangling: Rust injects server.raw_data; we group, aggregate, sort.
+# Expects server.raw_data = array of { region, amount, ... }
+(set server.result
+  (data.sort_by
+    (data.aggregate
+      (data.group_by server.raw_data ["region"])
+      { n: "count(*)" total: "sum(amount)" })
+    [{ col: "total" dir: "desc" }]))

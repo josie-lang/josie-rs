@@ -1,0 +1,22 @@
+# Backend response shape: Rust injects server.raw_people; we return custom JSON.
+# Output: { name, schemaVersion, properties: { totalCount, people: [...] } }
+# Each person: id, displayName, age, location { city, country }, contacts [...], tags [...]
+(set server.response
+  {
+    name: "PeopleApiResponse"
+    schemaVersion: "1.0"
+    properties: {
+      totalCount: (len server.raw_people)
+      people: (map server.raw_people {
+        id: item.id
+        displayName: (util.concat item.first " " item.last)
+        age: item.age
+        location: { city: item.city country: item.country }
+        contacts: [
+          { type: "email" value: item.email primary: true }
+          { type: "phone" value: item.phone primary: false }
+        ]
+        tags: (util.as_array item.tags)
+      })
+    }
+  })

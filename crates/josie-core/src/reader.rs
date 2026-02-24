@@ -85,6 +85,9 @@ fn parse_token_wrapped(first: Token, tokens: &mut Tokenizer) -> Result<Val, Read
                 let op_name = list.first().and_then(|v| v.as_str()).unwrap_or("");
                 let pos = list.len();
 
+                // If we have an operator but no arguments, and we're closing, 
+                // we should have handled it. But if we are reading, we continue.
+                
                 let final_val = match val_wrapped {
                     Val::Symbol(s) => {
                         if is_first {
@@ -111,6 +114,14 @@ fn parse_token_wrapped(first: Token, tokens: &mut Tokenizer) -> Result<Val, Read
                 list.push(final_val);
                 is_first = false;
             }
+            
+            // Post-processing: Ensure minimum argument counts for common operators
+            if let Some(Value::String(op)) = list.first() {
+                if (op == "!" || op == "not" || op == "len") && list.len() == 1 {
+                    list.push(json!(null));
+                }
+            }
+            
             Err(ReaderError::UnbalancedParenthesis)
         }
         Token::RParen => Err(ReaderError::UnbalancedParenthesis),

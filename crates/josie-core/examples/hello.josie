@@ -1,0 +1,2 @@
+# Hello: set a string in state via util.concat
+(set client.greeting (util.concat "Hello" ", " "World"))

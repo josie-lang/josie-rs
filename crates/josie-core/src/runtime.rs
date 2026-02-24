@@ -38,6 +38,7 @@ impl EvalError {
 pub struct FunctionDef {
     pub params: Vec<String>,
     pub body: Value,
+    pub memoizable: bool,
 }
 
 /// Runtime state split into `server` and `client` scopes.
@@ -47,6 +48,10 @@ pub struct State {
     pub client: Map<String, Value>,
     #[serde(skip)]
     pub fns: HashMap<String, FunctionDef>,
+    #[serde(skip)]
+    pub call_locals: Vec<HashMap<String, Value>>,
+    #[serde(skip)]
+    pub call_memo: HashMap<String, HashMap<String, Value>>,
 }
 
 impl State {
@@ -56,6 +61,8 @@ impl State {
             server: Map::new(),
             client: Map::new(),
             fns: HashMap::new(),
+            call_locals: Vec::new(),
+            call_memo: HashMap::new(),
         }
     }
 }
@@ -303,6 +310,13 @@ fn truthy(v: &Value) -> bool {
 }
 
 fn read_state_path(state: &State, path: &str) -> Option<Value> {
+    if !path.contains('.') {
+        for frame in state.call_locals.iter().rev() {
+            if let Some(v) = frame.get(path) {
+                return Some(v.clone());
+            }
+        }
+    }
     if let Some(rest) = path.strip_prefix("client.") {
         return map_get(&state.client, rest);
     }
@@ -313,6 +327,14 @@ fn read_state_path(state: &State, path: &str) -> Option<Value> {
 }
 
 fn write_state_path(state: &mut State, path: &str, value: Value) {
+    if !path.contains('.') {
+        if let Some(frame) = state.call_locals.last_mut() {
+            if frame.contains_key(path) {
+                frame.insert(path.to_string(), value);
+                return;
+            }
+        }
+    }
     if let Some(rest) = path.strip_prefix("client.") {
         map_set(&mut state.client, rest, value);
         return;
@@ -1664,6 +1686,37 @@ fn op_pipe(args: &[Value], ctx: &mut Context) -> EvalResult {
     out
 }
 
+fn has_side_effects(node: &Value) -> bool {
+    match node {
+        Value::Array(arr) => {
+            if let Some(op) = arr.first().and_then(Value::as_str) {
+                match op {
+                    "set" | "def" | "effect" | "log" | "push" | "w.event.prevent" => {
+                        return true;
+                    }
+                    _ => {}
+                }
+            }
+            arr.iter().any(has_side_effects)
+        }
+        Value::Object(obj) => obj.values().any(has_side_effects),
+        _ => false,
+    }
+}
+
+fn memo_key_from_args(args: &[Value]) -> Option<String> {
+    let cacheable = args.iter().all(|v| {
+        matches!(
+            v,
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_)
+        )
+    });
+    if !cacheable {
+        return None;
+    }
+    serde_json::to_string(args).ok()
+}
+
 fn op_def(args: &[Value], ctx: &mut Context) -> EvalResult {
     let name = require_arg(args, 0, "def")?
         .as_str()
@@ -1679,34 +1732,92 @@ fn op_def(args: &[Value], ctx: &mut Context) -> EvalResult {
         })
         .unwrap_or_default();
     let body = require_arg(args, 2, "def")?.clone();
-    ctx.state.fns.insert(name, FunctionDef { params, body });
+    let memoizable = !has_side_effects(&body);
+    ctx.state.fns.insert(
+        name.clone(),
+        FunctionDef {
+            params,
+            body,
+            memoizable,
+        },
+    );
+    // Def replacement invalidates previous memoized calls for this function.
+    ctx.state.call_memo.remove(&name);
     Ok(Value::Null)
 }
 
+/// Invokes a user-defined function (`def`) or a registered operator by name.
+///
+/// # Call protocol
+/// ```text
+/// (call <name> <arg0> <arg1> ...)
+/// ```
+///
+/// # Performance contract
+/// Parameters are bound into a lightweight call-local frame (`call_locals`)
+/// rather than mutating/cloning the full state maps. Variable resolution checks
+/// the newest local frame first, then falls back to client/server paths.
+/// Cost per call frame: O(param_count) without touching large state maps.
+///
+/// This is critical for recursive functions (e.g. Fibonacci), eliminating both
+/// full `State::clone()` and repeated client-map insert/remove churn per frame.
 fn op_call(args: &[Value], ctx: &mut Context) -> EvalResult {
-    let name_val = evaluate(require_arg(args, 0, "call")?, ctx)?;
-    let name = name_val
-        .as_str()
-        .ok_or_else(|| EvalError::new("call function name must be string"))?
-        .to_string();
+    let name = if let Some(s) = require_arg(args, 0, "call")?.as_str() {
+        s.to_string()
+    } else {
+        let name_val = evaluate(require_arg(args, 0, "call")?, ctx)?;
+        name_val
+            .as_str()
+            .ok_or_else(|| EvalError::new("call function name must be string"))?
+            .to_string()
+    };
 
     if let Some(def) = ctx.state.fns.get(&name).cloned() {
-        let mut evaluated_args = Vec::new();
+        // Evaluate args before touching state.
+        let mut evaluated_args = Vec::with_capacity(args.len().saturating_sub(1));
         for arg in &args[1..] {
             evaluated_args.push(evaluate(arg, ctx)?);
         }
-        let mut call_state = ctx.state.clone();
-        for (idx, param) in def.params.iter().enumerate() {
-            if let Some(v) = evaluated_args.get(idx) {
-                call_state.client.insert(param.clone(), v.clone());
+
+        let memo_key = if def.memoizable {
+            memo_key_from_args(&evaluated_args)
+        } else {
+            None
+        };
+        if let Some(key) = memo_key.as_ref() {
+            if let Some(v) = ctx
+                .state
+                .call_memo
+                .get(&name)
+                .and_then(|entry| entry.get(key))
+                .cloned()
+            {
+                return Ok(v);
             }
         }
-        let mut call_ctx = Context {
-            state: &mut call_state,
-            operators: ctx.operators,
-            event: ctx.event,
-        };
-        return evaluate(&def.body, &mut call_ctx);
+
+        // Bind params into a dedicated call-local frame.
+        let mut frame: HashMap<String, Value> = HashMap::with_capacity(def.params.len());
+        for (idx, param) in def.params.iter().enumerate() {
+            let new_val = evaluated_args.get(idx).cloned().unwrap_or(Value::Null);
+            frame.insert(param.clone(), new_val);
+        }
+        ctx.state.call_locals.push(frame);
+
+        let result = evaluate(&def.body, ctx);
+
+        // Pop local frame and restore caller scope.
+        let _ = ctx.state.call_locals.pop();
+
+        if let (Some(key), Ok(v)) = (memo_key, &result) {
+            ctx.state
+                .call_memo
+                .entry(name.clone())
+                .or_default()
+                .insert(key, v.clone());
+        }
+
+        return result;
     }
 
     if let Some(op) = ctx.operators.get(&name) {
