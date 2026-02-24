@@ -65,12 +65,14 @@ pub mod compiler;
 pub mod engine;
 pub mod jval;
 pub mod program;
+pub mod reader;
 pub mod runtime;
 pub mod vm;
 
 pub use compiler::Expr;
 pub use engine::Engine;
 pub use jval::JVal;
+pub use reader::{ReaderError, read, read_program};
 pub use runtime::{
     Context, EvalError, EvalResult, EventContext, FunctionDef, JsonNode, Operator, Operators,
     State, evaluate, get_path, set_path,

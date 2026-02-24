@@ -237,7 +237,7 @@
 
     init(bootstrap) {
       const input = bootstrap || window.__JOSIE_BOOTSTRAP__ || {};
-      this.program = input.program || {};
+      this.program = Object.assign(this.program || {}, input.program || {});
       const compiledState = window.__JOSIE_INITIAL_STATE__ || null;
       const state = input.state || compiledState || (this.program.state && (this.program.state.client || this.program.state)) || {};
       this.state = this.clone(state);

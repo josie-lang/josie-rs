@@ -66,7 +66,7 @@ pub const JOSIE_WEB_KIND: &str = "josie-web";
 pub const JOSIE_WEB_VERSION: &str = "0.1.0";
 pub const JOSIE_RUNTIME_JS: &str = include_str!("josie-runtime.js");
 pub const JOSIE_RUNTIME_DEV_JS: &str = include_str!("josie-runtime-dev.js");
-const TAILWIND_PREFLIGHT_CSS: &str = "*,:before,:after{box-sizing:border-box;border:0 solid #e5e7eb;}html{line-height:1.5;-webkit-text-size-adjust:100%;tab-size:4;font-family:ui-sans-serif,system-ui,sans-serif;}body{margin:0;line-height:inherit;}button,input,select,textarea{font:inherit;color:inherit;margin:0;padding:0;}h1,h2,h3,h4,h5,h6,p,ul,ol{margin:0;padding:0;}ul,ol{list-style:none;}";
+const TAILWIND_PREFLIGHT_CSS: &str = "*,:before,:after{box-sizing:border-box;border:0 solid #e5e7eb;}html{line-height:1.5;-webkit-text-size-adjust:100%;tab-size:4;font-family:var(--josie-font-sans, ui-sans-serif, system-ui, sans-serif);}body{margin:0;line-height:inherit;}button,input,select,textarea{font:inherit;color:inherit;margin:0;padding:0;}h1,h2,h3,h4,h5,h6,p,ul,ol{margin:0;padding:0;}ul,ol{list-style:none;}";
 
 /// Execution mode for client runtime assets.
 ///
@@ -344,6 +344,9 @@ impl JosieWebEngine {
                 });
             }
         }
+
+        // STRICT STERILITY VALIDATION
+        validate_template_sterility(&input.template)?;
 
         let stitched = stitch_components(&input.template, &input.components)?;
         let (template_without_program, maybe_program) = extract_program_payload(&stitched.source)?;
@@ -1350,15 +1353,20 @@ fn extract_program_payload(source: &str) -> Result<(String, Option<Value>), Stri
             .unwrap_or_default()
             .to_ascii_lowercase();
 
-        if script_type == "application/josie+json" {
+        if script_type == "application/josie+json" || script_type == "josie/script" {
             let Some(close_start) = find_close_tag(&template, open_end + 1, "script") else {
                 cursor = open_end + 1;
                 continue;
             };
             let close_end = close_start + "</script>".len();
             let payload_text = template[open_end + 1..close_start].trim();
+            
             let payload = if payload_text.is_empty() {
                 json!({})
+            } else if script_type == "josie/script" {
+                // Parse Lisp-style script block
+                josie_core::read(payload_text)
+                    .map_err(|e| format!("invalid josie/script payload: {e:?}"))?
             } else {
                 serde_json::from_str::<Value>(payload_text)
                     .map_err(|e| format!("invalid application/josie+json payload: {e}"))?
@@ -1368,8 +1376,6 @@ fn extract_program_payload(source: &str) -> Result<(String, Option<Value>), Stri
             found = true;
 
             template.replace_range(start..close_end, "");
-            // No need to advance cursor as we removed characters, 
-            // but we'll stay at 'start' to find the next tag that now moved here.
             cursor = start;
         } else {
             cursor = open_end + 1;
@@ -1393,42 +1399,169 @@ fn deep_merge(target: &mut Value, source: Value) {
 }
 
 fn merge_programs(target: &mut Value, source: Value) {
-    let Some(t) = target.as_object_mut() else { return };
-    let Some(s) = source.as_object() else { return };
+    if let Some(s_obj) = source.as_object() {
+        let target_obj = target.as_object_mut().unwrap();
 
-    // Deep merge state
-    if let Some(s_state) = s.get("state").cloned() {
-        let t_state = t.entry("state").or_insert_with(|| json!({}));
-        deep_merge(t_state, s_state);
-    }
-
-    // Deep merge actions
-    if let Some(s_actions) = s.get("actions").cloned() {
-        let t_actions = t.entry("actions").or_insert_with(|| json!({}));
-        deep_merge(t_actions, s_actions);
-    }
-
-    // Merge steps (append)
-    if let Some(s_steps) = s.get("steps").and_then(Value::as_array) {
-        let t_steps = t.entry("steps").or_insert_with(|| json!([])).as_array_mut().unwrap();
-        for step in s_steps {
-            t_steps.push(step.clone());
+        // Deep merge state
+        if let Some(s_state) = s_obj.get("state").cloned() {
+            let t_state = target_obj.entry("state").or_insert_with(|| json!({}));
+            deep_merge(t_state, s_state);
         }
-    }
 
-    // Merge memos (append)
-    if let Some(s_memos) = s.get("memos").and_then(Value::as_array) {
-        let t_memos = t.entry("memos").or_insert_with(|| json!([])).as_array_mut().unwrap();
-        for memo in s_memos {
-            t_memos.push(memo.clone());
+        // Deep merge actions
+        if let Some(s_actions) = s_obj.get("actions").cloned() {
+            let t_actions = target_obj.entry("actions").or_insert_with(|| json!({}));
+            deep_merge(t_actions, s_actions);
         }
-    }
 
-    // Merge effects (append)
-    if let Some(s_effects) = s.get("effects").and_then(Value::as_array) {
-        let t_effects = t.entry("effects").or_insert_with(|| json!([])).as_array_mut().unwrap();
-        for effect in s_effects {
-            t_effects.push(effect.clone());
+        // Merge steps (append)
+        if let Some(s_steps) = s_obj.get("steps").and_then(Value::as_array) {
+            let t_steps = target_obj
+                .entry("steps")
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+                .unwrap();
+            for step in s_steps {
+                t_steps.push(step.clone());
+            }
+        }
+
+        // Merge memos (append)
+        if let Some(s_memos) = s_obj.get("memos").and_then(Value::as_array) {
+            let t_memos = target_obj
+                .entry("memos")
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+                .unwrap();
+            for memo in s_memos {
+                t_memos.push(memo.clone());
+            }
+        }
+
+        // Merge effects (append)
+        if let Some(s_effects) = s_obj.get("effects").and_then(Value::as_array) {
+            let t_effects = target_obj
+                .entry("effects")
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+                .unwrap();
+            for effect in s_effects {
+                t_effects.push(effect.clone());
+            }
+        }
+
+        // Merge allowList (append)
+        if let Some(s_rules) = s_obj.get("allowList").and_then(Value::as_array) {
+            let t_rules = target_obj
+                .entry("allowList")
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+                .unwrap();
+            for rule in s_rules {
+                t_rules.push(rule.clone());
+            }
+        }
+
+        // Merge loadScripts (append)
+        if let Some(s_scripts) = s_obj.get("loadScripts").and_then(Value::as_array) {
+            let t_scripts = target_obj
+                .entry("loadScripts")
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+                .unwrap();
+            for script in s_scripts {
+                t_scripts.push(script.clone());
+            }
+        }
+    } else if let Some(s_arr) = source.as_array() {
+        // Handle raw Josie tree (e.g. from josie/script)
+        // We look for 'def' and 'set' at the top level to populate the program.
+        let mut boot_ops = Vec::new();
+        let ops = if s_arr.first().and_then(|v| v.as_str()) == Some("do") {
+            &s_arr[1..]
+        } else {
+            &s_arr[..]
+        };
+
+        for op in ops {
+            if let Some(node) = op.as_array() {
+                let name = node.first().and_then(|v| v.as_str()).unwrap_or("");
+                if name == "def" && node.len() >= 4 {
+                    let fn_name = node.get(1).and_then(|v| v.as_str()).unwrap_or("");
+                    let body = node.get(3).cloned().unwrap_or(Value::Null);
+                    
+                    let target_obj = target.as_object_mut().unwrap();
+                    let t_actions = target_obj.entry("actions").or_insert_with(|| json!({}));
+                    t_actions.as_object_mut().unwrap().insert(fn_name.to_string(), json!({ "runStep": fn_name }));
+                    
+                    let t_steps = target_obj.entry("steps").or_insert_with(|| json!([]));
+                    t_steps.as_array_mut().unwrap().push(json!({
+                        "id": fn_name,
+                        "op": "do",
+                        "args": [body]
+                    }));
+                } else if name == "effect" && node.len() >= 4 {
+                    let mut effect_id = node.get(1).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let target_obj = target.as_object_mut().unwrap();
+                    
+                    if effect_id.is_empty() {
+                        let current_len = target_obj.get("effects").and_then(|v: &Value| v.as_array()).map(|a: &Vec<Value>| a.len()).unwrap_or(0);
+                        effect_id = format!("eff_{:x}", current_len);
+                    }
+                    let deps = node.get(2).cloned().unwrap_or_else(|| json!([]));
+                    let body = node.get(3).cloned().unwrap_or(Value::Null);
+                    
+                    let step_id = format!("__effect_step_{}", effect_id);
+                    
+                    let t_steps = target_obj.entry("steps").or_insert_with(|| json!([]));
+                    t_steps.as_array_mut().unwrap().push(json!({
+                        "id": step_id,
+                        "op": "do",
+                        "args": [body]
+                    }));
+                    
+                    let t_effects = target_obj.entry("effects").or_insert_with(|| json!([]));
+                    t_effects.as_array_mut().unwrap().push(json!({
+                        "id": effect_id,
+                        "deps": deps,
+                        "runStep": step_id,
+                        "immediate": true
+                    }));
+                } else {
+                    boot_ops.push(op.clone());
+                }
+            } else {
+                boot_ops.push(op.clone());
+            }
+        }
+
+        if !boot_ops.is_empty() {
+            let target_obj = target.as_object_mut().unwrap();
+            
+            // Ensure unique step ID
+            let mut step_idx = target_obj.get("steps").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+            let mut step_id = format!("__boot_{:x}__", step_idx);
+            
+            while target_obj.get("steps").and_then(|v| v.as_array()).map(|a| a.iter().any(|s| s.get("id").and_then(|id| id.as_str()) == Some(&step_id))).unwrap_or(false) {
+                step_idx += 1;
+                step_id = format!("__boot_{:x}__", step_idx);
+            }
+            
+            let t_steps = target_obj.entry("steps").or_insert_with(|| json!([]));
+            t_steps.as_array_mut().unwrap().push(json!({
+                "id": step_id,
+                "op": "do",
+                "args": boot_ops
+            }));
+            
+            let t_effects = target_obj.entry("effects").or_insert_with(|| json!([]));
+            t_effects.as_array_mut().unwrap().push(json!({
+                "id": format!("effect_{}", step_id),
+                "deps": [],
+                "runStep": step_id,
+                "immediate": true,
+                "once": true
+            }));
         }
     }
 }
@@ -2376,41 +2509,14 @@ fn merged_load_scripts(
     program: &Value,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<String> {
-    let mut out = Vec::<String>::new();
-    let mut seen = HashSet::<String>::new();
-
-    for src in input_load_scripts {
-        let normalized = src.trim().to_string();
-        if normalized.is_empty() {
-            continue;
-        }
-        if seen.insert(normalized.clone()) {
-            out.push(normalized);
-        }
-    }
-
-    if let Some(list) = program.get("loadScripts").and_then(Value::as_array) {
-        for raw in list {
-            let Some(src) = raw.as_str() else {
-                continue;
-            };
-            let normalized = src.trim().to_string();
-            if normalized.is_empty() {
-                continue;
-            }
-            if seen.insert(normalized.clone()) {
-                out.push(normalized);
-            }
-        }
-    } else if program.get("loadScripts").is_some() {
+    if program.get("loadScripts").is_some() {
         diagnostics.push(Diagnostic {
             level: DiagnosticLevel::Warn,
-            code: "invalid_load_scripts".to_string(),
-            message: "program.loadScripts must be an array of script src strings".to_string(),
+            code: "ignored_load_scripts".to_string(),
+            message: "loadScripts must be defined in the backend, not the template; ignored".to_string(),
         });
     }
-
-    out
+    input_load_scripts.to_vec()
 }
 
 fn is_script_allowed_by_load_scripts(
@@ -2727,7 +2833,15 @@ fn parse_open_tag(inner: &str) -> Option<ParsedOpenTag> {
                 let quote = bytes[i];
                 i += 1;
                 let val_start = i;
-                while i < bytes.len() && bytes[i] != quote {
+                let mut escaped = false;
+                while i < bytes.len() {
+                    if escaped {
+                        escaped = false;
+                    } else if bytes[i] == b'\\' {
+                        escaped = true;
+                    } else if bytes[i] == quote {
+                        break;
+                    }
                     i += 1;
                 }
                 value = Some(s[val_start..i].to_string());
@@ -2911,6 +3025,16 @@ fn ensure_reactive_jid(attrs: &mut Vec<ParsedHtmlAttr>, jid_counter: &mut usize)
     new_jid
 }
 
+fn compile_lisp_path(path: &str) -> String {
+    let trimmed = path.trim();
+    if trimmed.starts_with('(') {
+        if let Ok(ast) = josie_core::read(trimmed) {
+            return ast.to_string();
+        }
+    }
+    path.to_string()
+}
+
 fn parse_close_tag_name(inner: &str) -> Option<String> {
     let trimmed = inner.trim_start();
     let rest = trimmed.strip_prefix('/')?;
@@ -2991,6 +3115,7 @@ fn extract_reactive_bindings_and_annotate_html(
                 .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty())
             {
+                let path = compile_lisp_path(&path);
                 let jid = ensure_reactive_jid(&mut parsed.attrs, &mut jid_counter);
                 bindings.push(ReactiveBinding {
                     jid,
@@ -3004,6 +3129,7 @@ fn extract_reactive_bindings_and_annotate_html(
                 .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty())
             {
+                let path = compile_lisp_path(&path);
                 let jid = ensure_reactive_jid(&mut parsed.attrs, &mut jid_counter);
                 bindings.push(ReactiveBinding {
                     jid,
@@ -3017,6 +3143,7 @@ fn extract_reactive_bindings_and_annotate_html(
                 .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty())
             {
+                let path = compile_lisp_path(&path);
                 let jid = ensure_reactive_jid(&mut parsed.attrs, &mut jid_counter);
                 bindings.push(ReactiveBinding {
                     jid,
@@ -3042,7 +3169,8 @@ fn extract_reactive_bindings_and_annotate_html(
                     if path.is_empty() {
                         return None;
                     }
-                    Some((attr_name.to_string(), path.to_string()))
+                    let path = compile_lisp_path(path);
+                    Some((attr_name.to_string(), path))
                 })
                 .collect();
             for (attr_name, path) in attr_entries {
@@ -3127,56 +3255,14 @@ fn merged_allow_list(
     program: &Value,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<AllowListRule> {
-    let mut out = Vec::<AllowListRule>::new();
-    let mut seen = HashSet::<(String, String)>::new();
-
-    for rule in input_allow_list {
-        let key = (
-            rule.rule_type.to_ascii_lowercase(),
-            rule.value.trim().to_string(),
-        );
-        if key.1.is_empty() {
-            continue;
-        }
-        if seen.insert(key.clone()) {
-            out.push(AllowListRule {
-                rule_type: key.0,
-                value: key.1,
-            });
-        }
-    }
-
-    if let Some(list) = program.get("allowList").and_then(Value::as_array) {
-        for raw in list {
-            let Some(obj) = raw.as_object() else {
-                continue;
-            };
-            let Some(rule_type) = obj.get("type").and_then(Value::as_str) else {
-                continue;
-            };
-            let Some(value) = obj.get("value").and_then(Value::as_str) else {
-                continue;
-            };
-            let key = (rule_type.to_ascii_lowercase(), value.trim().to_string());
-            if key.1.is_empty() {
-                continue;
-            }
-            if seen.insert(key.clone()) {
-                out.push(AllowListRule {
-                    rule_type: key.0,
-                    value: key.1,
-                });
-            }
-        }
-    } else if program.get("allowList").is_some() {
+    if program.get("allowList").is_some() {
         diagnostics.push(Diagnostic {
             level: DiagnosticLevel::Warn,
-            code: "invalid_allow_list".to_string(),
-            message: "program.allowList must be an array of {type,value}".to_string(),
+            code: "ignored_allow_list".to_string(),
+            message: "security allowList must be defined in the backend, not the template; ignored".to_string(),
         });
     }
-
-    out
+    input_allow_list.to_vec()
 }
 
 fn extract_tag_name(tag_inner: &str) -> Option<String> {
@@ -3286,6 +3372,63 @@ fn escape_html(input: &str) -> String {
         }
     }
     out
+}
+
+/// Strict validation of the template HTML structure.
+fn validate_template_sterility(html: &str) -> Result<(), String> {
+    let mut cursor = 0usize;
+    let lower = html.to_ascii_lowercase();
+    
+    while let Some(rel_idx) = lower[cursor..].find('<') {
+        let open_start = cursor + rel_idx;
+        let Some(open_end) = find_tag_end(html, open_start) else {
+            break;
+        };
+        
+        let tag_inner = &html[open_start + 1..open_end];
+        let name = extract_tag_name(tag_inner).unwrap_or_default();
+
+        if name == "script" {
+            let script_type = extract_attr_value(tag_inner, "type")
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if script_type != "application/josie+json" && script_type != "josie/script" {
+                return Err(format!(
+                    "forbidden <script> tag detected: JosieML only allows <script type='josie/script'> or <script type='application/josie+json'>. Found type='{}'",
+                    script_type
+                ));
+            }
+        }
+
+        // REJECT any inline event handlers (on*)
+        let mut attr_cursor = 0usize;
+        while attr_cursor < tag_inner.len() {
+            let rest = &tag_inner[attr_cursor..];
+            if let Some(eq_pos) = rest.find('=') {
+                let key_part = rest[..eq_pos].trim();
+                let key = key_part.split_whitespace().last().unwrap_or("");
+                if key.to_ascii_lowercase().starts_with("on") && key.len() > 2 {
+                    return Err(format!(
+                        "forbidden inline event handler detected: '{}'. Use '@{}' instead.",
+                        key, &key[2..]
+                    ));
+                }
+                attr_cursor += eq_pos + 1;
+                // skip value
+                if attr_cursor < tag_inner.len() {
+                    let next_ch = tag_inner[attr_cursor..].chars().next().unwrap();
+                    if next_ch == '"' || next_ch == '\'' {
+                        if let Some(rel_close) = tag_inner[attr_cursor+1..].find(next_ch) {
+                            attr_cursor += rel_close + 2;
+                        } else { break; }
+                    }
+                }
+            } else { break; }
+        }
+        
+        cursor = open_end + 1;
+    }
+    Ok(())
 }
 
 fn apply_tailwind_processor(
@@ -3666,6 +3809,22 @@ fn compile_program_to_js(
     js.push_str("window.__JOSIE_BINDINGS__=");
     js.push_str(&bindings_js);
     js.push(';');
+
+    if let Some(memos) = program.get("memos") {
+        let memos_js = serde_json::to_string(memos)
+            .map_err(|e| format!("failed to encode runtime memos: {e}"))?;
+        js.push_str("J.program.memos=");
+        js.push_str(&memos_js);
+        js.push(';');
+    }
+    if let Some(effects) = program.get("effects") {
+        let effects_js = serde_json::to_string(effects)
+            .map_err(|e| format!("failed to encode runtime effects: {e}"))?;
+        js.push_str("J.program.effects=");
+        js.push_str(&effects_js);
+        js.push(';');
+    }
+
     js.push_str("const steps={};");
 
     if let Some(steps) = program.get("steps").and_then(Value::as_array) {

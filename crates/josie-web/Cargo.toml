@@ -13,5 +13,6 @@ keywords = ["josie", "web", "reactive", "compiler", "runtime"]
 categories = ["web-programming", "development-tools"]
 
 [dependencies]
+josie-core = { version = "0.1.0", path = "../josie-core" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

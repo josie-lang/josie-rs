@@ -891,21 +891,14 @@ fn utility_rule(utility: &str, base_selector: &str, important: bool) -> Option<U
 
     if let Some(v) = utility.strip_prefix("font-") {
         if !matches!(v, "normal" | "medium" | "semibold" | "bold") {
-            if v == "mono" {
-                return Some(simple_rule(
-                    base_selector,
-                    "font-family:ui-monospace,SFMono-Regular,Menlo,monospace;",
-                    important,
-                ));
-            }
-            if v == "serif" {
-                return Some(simple_rule(
-                    base_selector,
-                    "font-family:ui-serif,Georgia,Cambria,serif;",
-                    important,
-                ));
-            }
-            let slug = v
+            let (var_name, fallback) = match v {
+                "sans" => ("sans", "ui-sans-serif, system-ui, sans-serif"),
+                "mono" => ("mono", "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace"),
+                "serif" => ("serif", "ui-serif, Georgia, Cambria, serif"),
+                _ => (v, v),
+            };
+
+            let slug = var_name
                 .chars()
                 .map(|c| {
                     if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
@@ -915,9 +908,10 @@ fn utility_rule(utility: &str, base_selector: &str, important: bool) -> Option<U
                     }
                 })
                 .collect::<String>();
+
             return Some(simple_rule(
                 base_selector,
-                &format!("font-family:var(--josie-font-{}, '{}');", slug, v),
+                &format!("font-family:var(--josie-font-{}, {});", slug, fallback),
                 important,
             ));
         }

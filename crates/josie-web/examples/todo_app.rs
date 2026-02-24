@@ -1,4 +1,4 @@
-use josie_web::{CompileInput, JosieWebEngine, RenderInput, RuntimeMode};
+use josie_web::{AllowListRule, CompileInput, JosieWebEngine, RenderInput, RuntimeMode};
 use serde_json::Map;
 use std::collections::HashMap;
 use std::fs;
@@ -18,8 +18,21 @@ fn main() -> Result<(), String> {
         template: template.to_owned(),
         components: HashMap::new(),
         processors: vec!["tailwind".to_string(), "minify".to_string()],
-        allow_list: vec![],
-        load_scripts: vec![],
+        allow_list: vec![
+            AllowListRule {
+                rule_type: "url".to_string(),
+                value: "https://fonts.googleapis.com".to_string(),
+            },
+            AllowListRule {
+                rule_type: "url".to_string(),
+                value: "https://fonts.gstatic.com".to_string(),
+            },
+            AllowListRule {
+                rule_type: "url".to_string(),
+                value: "https://unpkg.com".to_string(),
+            },
+        ],
+        load_scripts: vec!["https://unpkg.com/lucide@latest".to_string()],
         runtime_mode: Some(runtime_mode),
         cache: None,
         cache_policy: None,

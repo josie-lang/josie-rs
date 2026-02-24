@@ -3,15 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>TigerGun Todo</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <title>Josie Lisp Todo</title>
 </head>
 <body class="min-h-screen bg-zinc-950 text-zinc-100 antialiased">
   <main class="mx-auto max-w-3xl px-4 py-10">
     <section class="rounded-2xl border border-zinc-800 bg-zinc-900/80 p-6 shadow-2xl shadow-black/30">
       <header class="mb-6 space-y-1">
         <h1 class="text-2xl font-semibold tracking-tight" j-text="client.appTitle"></h1>
-        <p class="text-sm text-zinc-400">Pure Josie runtime + Tailwind classes. No npm build.</p>
+        <p class="text-sm text-zinc-400">Pure Josie Lisp syntax. Zero-cost compilation.</p>
       </header>
 
       <form class="mb-4 flex gap-2" @submit="todo.add">
@@ -42,7 +41,8 @@
         </div>
       </div>
 
-      <ul class="space-y-2" data-josie-map='{"source":["var","client.viewTodos"]}'>
+      <!-- data-josie-map still uses JSON for its configuration object -->
+      <ul class="space-y-2" data-josie-map='{"source":"client.viewTodos"}'>
         <li j-attr:class="local.item.rowClass">
           <button
             type="button"
@@ -74,227 +74,82 @@
     </section>
   </main>
 
-  <script type="application/josie+json">
-  {
-    "kind": "program",
-    "version": "0.1.0",
-    "state": {
-      "client": {
-        "appTitle": "TigerGun Todo",
-        "newTodo": "",
-        "seq": 4,
-        "todos": [
-          { "id": "1", "title": "Define pipeline contract", "done": false },
-          { "id": "2", "title": "Build webhook flow", "done": true },
-          { "id": "3", "title": "Ship project dashboard", "done": false }
-        ],
-        "stats": { "total": 3, "done": 1, "open": 2 },
-        "viewTodos": [
-          {
-            "id": "1",
-            "title": "Define pipeline contract",
-            "done": false,
-            "status": "OPEN",
-            "rowClass": "flex items-center gap-3 rounded-xl border border-zinc-700 bg-zinc-800/60 px-3 py-2",
-            "titleClass": "flex-1 text-sm text-zinc-100"
-          },
-          {
-            "id": "2",
-            "title": "Build webhook flow",
-            "done": true,
-            "status": "DONE",
-            "rowClass": "flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2",
-            "titleClass": "flex-1 text-sm text-zinc-400 line-through"
-          },
-          {
-            "id": "3",
-            "title": "Ship project dashboard",
-            "done": false,
-            "status": "OPEN",
-            "rowClass": "flex items-center gap-3 rounded-xl border border-zinc-700 bg-zinc-800/60 px-3 py-2",
-            "titleClass": "flex-1 text-sm text-zinc-100"
-          }
-        ]
-      }
-    },
-    "actions": {
-      "todo.add": {
-        "run": [
-          { "step": "todo.add.core" },
-          { "step": "todo.recalc" },
-          { "step": "todo.sync_view" }
-        ]
-      },
-      "todo.toggle": {
-        "run": [
-          { "step": "todo.toggle.core" },
-          { "step": "todo.recalc" },
-          { "step": "todo.sync_view" }
-        ]
-      },
-      "todo.delete": {
-        "run": [
-          { "step": "todo.delete.core" },
-          { "step": "todo.recalc" },
-          { "step": "todo.sync_view" }
-        ]
-      },
-      "todo.clear_done": {
-        "run": [
-          { "step": "todo.clear_done.core" },
-          { "step": "todo.recalc" },
-          { "step": "todo.sync_view" }
-        ]
-      }
-    },
-    "resources": [],
-    "steps": [
-      {
-        "id": "todo.add.core",
-        "type": "action",
-        "op": "do",
-        "args": [
-          ["w.event.prevent"],
-          [
-            "if",
-            [">", ["util.str_len", ["util.trim", ["var", "client.newTodo"]]], 0],
-            [
-              "do",
-              [
-                "set",
-                "client.todos",
-                [
-                  "push",
-                  ["var", "client.todos"],
-                  {
-                    "id": ["util.to_string", ["var", "client.seq"]],
-                    "title": ["util.trim", ["var", "client.newTodo"]],
-                    "done": false
-                  }
-                ]
-              ],
-              ["set", "client.seq", ["+", ["var", "client.seq"], 1]],
-              ["set", "client.newTodo", ""]
-            ],
-            null
-          ]
-        ]
-      },
-      {
-        "id": "todo.toggle.core",
-        "type": "action",
-        "op": "do",
-        "args": [
-          [
-            "set",
-            "client.todos",
-            [
-              "map",
-              ["var", "client.todos"],
-              {
-                "id": ["var", "item.id"],
-                "title": ["var", "item.title"],
-                "done": [
-                  "if",
-                  ["==", ["var", "item.id"], ["w.event.value"]],
-                  ["!", ["var", "item.done"]],
-                  ["var", "item.done"]
-                ]
-              }
-            ]
-          ]
-        ]
-      },
-      {
-        "id": "todo.delete.core",
-        "type": "action",
-        "op": "do",
-        "args": [
-          [
-            "set",
-            "client.todos",
-            [
-              "filter",
-              ["var", "client.todos"],
-              ["!=", ["var", "item.id"], ["w.event.value"]]
-            ]
-          ]
-        ]
-      },
-      {
-        "id": "todo.clear_done.core",
-        "type": "action",
-        "op": "do",
-        "args": [
-          [
-            "set",
-            "client.todos",
-            [
-              "filter",
-              ["var", "client.todos"],
-              ["!", ["var", "item.done"]]
-            ]
-          ]
-        ]
-      },
-      {
-        "id": "todo.recalc",
-        "type": "transform",
-        "op": "do",
-        "args": [
-          ["set", "client.stats.total", ["len", ["var", "client.todos"]]],
-          [
-            "set",
-            "client.stats.done",
-            [
-              "reduce",
-              ["var", "client.todos"],
-              ["if", ["var", "item.done"], ["+", ["var", "acc"], 1], ["var", "acc"]],
-              0
-            ]
-          ],
-          [
-            "set",
-            "client.stats.open",
-            ["-", ["var", "client.stats.total"], ["var", "client.stats.done"]]
-          ]
-        ]
-      },
-      {
-        "id": "todo.sync_view",
-        "type": "transform",
-        "op": "do",
-        "args": [
-          [
-            "set",
-            "client.viewTodos",
-            [
-              "map",
-              ["var", "client.todos"],
-              {
-                "id": ["var", "item.id"],
-                "title": ["var", "item.title"],
-                "done": ["var", "item.done"],
-                "status": ["if", ["var", "item.done"], "DONE", "OPEN"],
-                "rowClass": [
-                  "if",
-                  ["var", "item.done"],
-                  "flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2",
-                  "flex items-center gap-3 rounded-xl border border-zinc-700 bg-zinc-800/60 px-3 py-2"
-                ],
-                "titleClass": [
-                  "if",
-                  ["var", "item.done"],
-                  "flex-1 text-sm text-zinc-400 line-through",
-                  "flex-1 text-sm text-zinc-100"
-                ]
-              }
-            ]
-          ]
-        ]
-      }
-    ]
-  }
+  <script type="josie/script">
+    # Initial State
+    (set client.appTitle "Josie Lisp Todo")
+    (set client.newTodo "")
+    (set client.seq 4)
+    (set client.todos [
+      { id: "1", title: "Define pipeline contract", done: false }
+      { id: "2", title: "Build webhook flow", done: true }
+      { id: "3", title: "Ship project dashboard", done: false }
+    ])
+
+    # Recalculate Statistics
+    (def todo.recalc ()
+      (do
+        (set client.stats.total (len client.todos))
+        (set client.stats.done 
+          (reduce client.todos (if item.done (+ acc 1) acc) 0))
+        (set client.stats.open (- client.stats.total client.stats.done))))
+
+    # Synchronize View Model (Tailwind classes)
+    (def todo.sync_view ()
+      (set client.viewTodos
+        (map client.todos {
+          id: item.id
+          title: item.title
+          done: item.done
+          status: (if item.done "DONE" "OPEN")
+          rowClass: (if item.done 
+            "flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2"
+            "flex items-center gap-3 rounded-xl border border-zinc-700 bg-zinc-800/60 px-3 py-2")
+          titleClass: (if item.done
+            "flex-1 text-sm text-zinc-400 line-through"
+            "flex-1 text-sm text-zinc-100")
+        })))
+
+    # Actions
+    (def todo.add ()
+      (do
+        (w.event.prevent)
+        (if (> (util.str_len (util.trim client.newTodo)) 0)
+          (do
+            (set client.todos (push client.todos {
+              id: (util.to_string client.seq)
+              title: (util.trim client.newTodo)
+              done: false
+            }))
+            (set client.seq (+ client.seq 1))
+            (set client.newTodo "")
+            (todo.recalc)
+            (todo.sync_view)))))
+
+    (def todo.toggle ()
+      (do
+        (set client.todos (map client.todos {
+          id: item.id
+          title: item.title
+          done: (if (== item.id w.event.value) (! item.done) item.done)
+        }))
+        (todo.recalc)
+        (todo.sync_view)))
+
+    (def todo.delete ()
+      (do
+        (set client.todos (filter client.todos (!= item.id w.event.value)))
+        (todo.recalc)
+        (todo.sync_view)))
+
+    (def todo.clear_done ()
+      (do
+        (set client.todos (filter client.todos (! item.done)))
+        (todo.recalc)
+        (todo.sync_view)))
+
+    # Boot
+    (todo.recalc)
+    (todo.sync_view)
   </script>
 </body>
 </html>
